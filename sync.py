@@ -8,7 +8,7 @@ Runs locally on the Mac (SharePoint login only works here). Pipeline:
   4. publish.py -> Vercel Blob (only changed files; live in seconds)
 
 No site redeploy is needed for data changes; `vercel deploy` runs only when
-app.py / public/ / requirements.txt change (do that by hand).
+the SvelteKit app changes (src/, svelte.config.js, package.json).
 
 Usage:
   python3 sync.py                 # full run with schedule logic

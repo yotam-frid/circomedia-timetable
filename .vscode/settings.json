@@ -1,4 +1,14 @@
 {
+  "tailwindCSS.includeLanguages": {
+    "svelte": "html"
+  },
+  "tailwindCSS.experimental.classRegex": [
+    ["class:\\s*\"([^\"]*)\""],
+    ["class:\\s*'([^']*)'"],
+    ["class:\\s*\\{\\s*['\"`]([^'\"`]*)['\"`]\\s*\\}"],
+    ["class:([\\w-]+)"]
+  ],
+  "tailwindCSS.experimental.configFile": "./src/app.css",
   "workbench.colorCustomizations": {
     "activityBar.background": "#4D4D0F",
     "titleBar.activeBackground": "#6C6C15",
