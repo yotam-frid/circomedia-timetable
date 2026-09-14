@@ -27,7 +27,8 @@ Procedure:
      Year-1 yellow fill (FFFFFF00) marks Year-1 blocks; explicit name
      matches count regardless of fill.
   3. Write Apple/Google-Calendar-compatible .ics (RFC 5545 line folding). Event name is the class
-     ('Core Skills - Tumbling', no group in name). Location is the
+      ('Core Skills - Tumbling', plus ' (Group N)' suffix when
+      INCLUDE_GROUP_IN_TITLE and the event is group-specific). Location is the
      room (Gym Bay 1, Classroom, South Wing...). Teacher/group go in DESCRIPTION.
 
 Week dating: the first Monday of term is 14-09-2026 (Week 1). The week
@@ -52,6 +53,12 @@ except ImportError:
     sys.exit("Need openpyxl: pip install openpyxl")
 
 YEAR1_YELLOW = "FFFFFF00"
+
+# When True, group-specific events carry the student's group in the title,
+# e.g. 'Acro (Group B)', 'Core Skills - Tumbling (Group 1)',
+# 'Conditioning (Group D)'. Non-group events (All-years, named 1-to-1s)
+# keep the bare class name. UIDs are unaffected (they key on subject_key).
+INCLUDE_GROUP_IN_TITLE = True
 
 TERM_WEEK1_MONDAY = dt.date(2026, 9, 14)  # Week 1 Monday (dd-mm-yyyy 14-09-2026)
 WEEK_RE = re.compile(r"weeks?\s*(\d+)", re.I)
@@ -514,6 +521,28 @@ def event_name(texts):
     return base
 
 
+def display_event_name(texts, subject_key, groups, groups_in_block):
+    """Class name, with ' (Group X)' suffix when the event is group-specific.
+
+    Controlled by INCLUDE_GROUP_IN_TITLE. Uses the student's own group label
+    for the block's subject (e.g. 'Group B'); non-group events (All-years,
+    named 1-to-1s with no group in the block) keep the bare name.
+    """
+    base = event_name(texts)
+    if not INCLUDE_GROUP_IN_TITLE or not subject_key:
+        return base
+    mine = (groups or {}).get(subject_key, "")
+    if not mine:
+        return base
+    joined = " | ".join(texts).lower()
+    group_specific = bool(groups_in_block) or (mine.lower() in joined)
+    if not group_specific:
+        return base
+    if mine.lower() in base.lower():
+        return base
+    return f"{base} ({mine})"
+
+
 def teachers_of(texts):
     out = []
     skip = ("group", "yr 1", "1st year", "all year", "core skill", "tumbling",
@@ -662,7 +691,8 @@ def extract_for_student(wb, name, monday=None, cal_year=2026, cal_month=9,
             teachers = teachers_of(texts)
             events.append({
                 "date": date, "day": s.strip(), "start": start, "end": end,
-                "name": event_name(texts), "location": b["location"],
+                "name": display_event_name(texts, skey, me, groups_in_block),
+                "location": b["location"],
                 "teachers": teachers, "reason": reason,
                 "texts": texts, "subject_key": skey,
             })
