@@ -42,10 +42,12 @@ export function prettySubject(key) {
 /** Calendar URLs for a feed slug on the current origin. */
 export function feedUrls(slug, origin = window.location.origin) {
   const https = `${origin}/feeds/${slug}.ics`;
+  const webcal = https.replace(/^https?:\/\//, 'webcal://');
   return {
     https,
-    webcal: https.replace(/^https?:\/\//, 'webcal://'),
-    google: 'https://calendar.google.com/calendar/r?cid=' + encodeURIComponent(https)
+    webcal,
+    // Google's cid= deep-link only accepts webcal:// (see src/lib/server/blob.js).
+    google: 'https://calendar.google.com/calendar/r?cid=' + encodeURIComponent(webcal)
   };
 }
 

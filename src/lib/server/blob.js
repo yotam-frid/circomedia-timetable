@@ -54,6 +54,9 @@ export const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export function feedUrls(origin, slug) {
   const https = `${origin}/feeds/${slug}.ics`;
   const webcal = https.replace(/^https:\/\//, 'webcal://').replace(/^http:\/\//, 'webcal://');
-  const google = 'https://calendar.google.com/calendar/r?cid=' + encodeURIComponent(https);
+  // Google's cid= deep-link only accepts webcal:// (since ~2025 it rejects
+  // https:// feeds with "Unable to Add Calendar. Check the URL."; https still
+  // works via the manual Settings -> Add calendar -> From URL flow).
+  const google = 'https://calendar.google.com/calendar/r?cid=' + encodeURIComponent(webcal);
   return { https, webcal, google };
 }
