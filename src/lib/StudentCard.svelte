@@ -45,16 +45,18 @@
     {/if}
   </div>
 
-  <div class="flex flex-col gap-2 border-t border-line px-6 py-5 sm:flex-row">
+  <div class="flex flex-col gap-2 border-t border-line px-6 py-5">
+    <label
+      for="feed-url"
+      class="block text-sm font-medium uppercase tracking-wider text-ink-400"
+    >
+      Get personal calendar
+    </label>
     <a
       href={student.feed.webcal}
       class="relative flex flex-1 items-center justify-center rounded-xl border border-line bg-white px-4 py-3 text-center text-sm font-medium text-ink-800 transition hover:border-line-dark hover:bg-cream-50"
     >
-      <img
-        src="/apple-logo.svg"
-        alt=""
-        class="absolute left-4 h-4 w-auto"
-      />
+      <img src="/apple-logo.svg" alt="" class="absolute left-4 h-4 w-auto" />
       Add to Apple Calendar
     </a>
     <a
@@ -63,11 +65,7 @@
       rel="noopener"
       class="relative flex flex-1 items-center justify-center rounded-xl border border-line bg-white px-4 py-3 text-center text-sm font-medium text-ink-800 transition hover:border-line-dark hover:bg-cream-50"
     >
-      <img
-        src="/google-logo.png"
-        alt=""
-        class="absolute left-4 h-4 w-auto"
-      />
+      <img src="/google-logo.png" alt="" class="absolute left-4 h-4 w-auto" />
       Add to Google Calendar
     </a>
   </div>
@@ -77,7 +75,7 @@
       for="feed-url"
       class="block text-sm font-medium uppercase tracking-wider text-ink-400"
     >
-      Your calendar feed — keep it private
+      Private calendar feed
     </label>
     <div class="mt-2 flex gap-2">
       <input
@@ -95,11 +93,4 @@
       </button>
     </div>
   </div>
-
-  <p
-    class="border-t border-line bg-cream-50 px-6 py-4 text-sm leading-relaxed text-ink-400"
-  >
-    Android / other: copy the link, then in your calendar app choose “Subscribe
-    from URL” and paste it. Updates arrive automatically.
-  </p>
 </article>
