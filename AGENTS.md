@@ -43,10 +43,12 @@ runs ONLY when `src/` / `svelte.config.js` / `package.json` change.
 | `src/lib/StudentSearch.svelte` etc. | Styled components (search box / card / picker) with a Claude-website-inspired look: warm cream bg, serif headings, coral accent |
 | `src/app.css` | Tailwind CSS **v4** entry (CSS-first config): `@theme` defines cream/ink/coral palette + serif/sans/mono fonts; `@layer base` sets body styles |
 | `src/routes/+layout.svelte` | Imports `app.css`; everything else renders in `+page.svelte` |
+| `src/routes/+page.js` | SPA shell: `prerender = true` + `ssr = false`. Page carries no data; all roster/feed fetching happens client-side |
 | `src/lib/server/blob.js` | Server-only Blob reader: `BLOB_BASE_URL` env with public-URL fallback, 300s in-memory roster cache |
 | `svelte.config.js` | `adapter-vercel` (zero-config Vercel deploy; Framework Preset must be SvelteKit, not Python) |
 | `vite.config.js` | SvelteKit + `@tailwindcss/vite` plugins. V4 deps: `tailwindcss`, `@tailwindcss/vite` (+ `@sveltejs/vite-plugin-svelte`) |
 | `package.json` | SvelteKit app, **pnpm** (`dev`, `build`, `preview`). No Python requirements |
+| `pnpm-lock.yaml` | Committed — Vercel auto-detects pnpm from it; `packageManager` pins pnpm@10.9.0 (corepack-ready) |
 | `incoming/` | Downloaded xlsx (gitignored). Filenames carry week numbers (`Week 1` → Mon 14-09-2026) |
 | `site/` | Build output (gitignored): `feeds/*.ics`, `roster.json`, `manifest.json` |
 | `.sync_state.json` | (gitignored) `last_built_hashes` + `published_hashes` — what makes sync/publish idempotent |
@@ -61,6 +63,20 @@ runs ONLY when `src/` / `svelte.config.js` / `package.json` change.
 - Store connected via `vercel storage connect` (OIDC credentials — no static token)
 - Local blob auth: `source .env.local` (gitignored) provides `BLOB_STORE_ID` + `VERCEL_OIDC_TOKEN`; `publish.py` does this itself
 - Deploy: `vercel deploy --prod --yes` from repo root
+
+## Local dev (SvelteKit app)
+
+```sh
+corepack enable   # once: uses the packageManager pin (or `npm i -g pnpm`)
+pnpm install      # once
+pnpm dev          # hot-reload dev server (API + feed routes served live)
+pnpm build        # what Vercel runs; `pnpm preview` serves the static output only
+```
+
+No env setup needed: server routes read `BLOB_BASE_URL` when set and fall
+back to the store's public URL otherwise, so `pnpm dev` works against live
+Blob data out of the box. (`vercel env pull .env.local` only if you need
+private env values locally; never commit that file.)
 
 ## The matcher (read before touching `timetable_to_ics.py`)
 
@@ -104,5 +120,8 @@ ICS output: deterministic UIDs (`sha1(date|start|end|subject)@circomedia`), `SEQ
 - **`.env.local` OIDC token expires** — `publish.py` auto-refreshes via `vercel env pull` on auth failure. Don't commit `.env.local` (gitignored via `.env*`).
 - **`vercel env add` needs `--value ... --yes`** for non-interactive use; preview envs need no branch flag when passed this way.
 - **`vercel blob put` needs `--allow-overwrite true`** for stable-pathname updates, plus sourced OIDC env when run outside `publish.py`.
+- **`+layout.svelte` uses legacy `<slot />`**, not Svelte 5 `{@render children()}`.
+  Works (compat mode, build is green) — don't "fix" it piecemeal; convert only
+  if touching the layout anyway.
 - **Don't touch `/opt/circomedia` dependencies**: the Hetzner box project copy is scrapped, but `bot@*.service` units there are someone else's — never touch.
 - No commits unless the user asks.
