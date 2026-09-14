@@ -18,12 +18,15 @@ Procedure:
   2. Read every day sheet (Mon-Fri). For each location column, split into
      time blocks anchored by time-range headers (e.g. '8.45 - 10.00').
      A block belongs to the student if it:
-       - names them explicitly, OR
-       - says All Yr N / All 1st years (matching their year), OR
+       - names them explicitly (pre-dash segment only: in 'Tan - Jonathan'
+         the teacher after the dash does not count; pure teacher lists like
+         'Lisa, Ethan, Chané' never count), OR
+       - says All Yr N / All Nth years matching their year, or generic All
+         years with a yellow header, OR
        - names a group they belong to for that block's subject.
      Year-1 yellow fill (FFFFFF00) marks Year-1 blocks; explicit name
      matches count regardless of fill.
-  3. Write Apple-Calendar-compatible .ics. Event name is the class
+  3. Write Apple/Google-Calendar-compatible .ics (RFC 5545 line folding). Event name is the class
      ('Core Skills - Tumbling', no group in name). Location is the
      room (Gym Bay 1, Classroom, South Wing...). Teacher/group go in DESCRIPTION.
 
@@ -55,6 +58,21 @@ WEEK_RE = re.compile(r"weeks?\s*(\d+)", re.I)
 
 TIME_RANGE_RE = re.compile(r"(\d{1,2})\s*[.:]\s*(\d{2})\s*[-\u2013]\s*(\d{1,2})\s*[.:]\s*(\d{2})")
 GROUP_RE = re.compile(r"Group\s*([ABCD123abcd123])\b")
+# Private lessons are written '<student> - <teacher>' ('Tan - Jonathan',
+# 'Oakley & Joanna - Nicky'). Only the pre-dash segment can name a student;
+# split only on dashes with whitespace beside them so hyphenated surnames
+# ('Mark Parfitt-Jones') stay intact.
+DASH_SPLIT_RE = re.compile(r"\s+-\s*|\s*-\s+|[\u2013\u2014]")
+# A booked 1-to-1 session: 'Charlie (Creative)'. Any other person named
+# in the same block ('Charlie (Creative)' + 'Jonathan') is the tutor.
+OWNER_RE = re.compile(r"^[^()]{1,25} \([A-Za-z]+\)$")
+# A pure list of 2+ person names ('Lisa, Ethan, Chané', 'Nicky and Janine').
+NAME_LIKE_RE = re.compile(r"^[A-Z\u00c0-\u00de][a-z\u00e0-\u00fe]+(?: [A-Z\u00c0-\u00de][a-z\u00e0-\u00fe]+)?$")
+TEACHER_LIST_SPLIT_RE = re.compile(r",|\band\b")
+# 'All Yr 1', 'All 1st years', 'All 2nd Year', 'All 3rd years' -> year number.
+ALL_YEAR_RE = re.compile(
+    r"\ball\s*(?:(?:yr|year)s?\s*)?([123])(?:\s*(?:st|nd|rd|th))?(?:\s*years?)?\b", re.I)
+ALL_YEARS_GENERIC_RE = re.compile(r"\ball\s+years\b", re.I)
 DAY_ORDER = ["monday", "tuesday", "wednesday", "thursday", "friday"]
 
 
@@ -62,6 +80,28 @@ def make_uid(date, start, end, subject_key):
     """Deterministic UID: same logical class always gets the same UID."""
     raw = f"{date.isoformat()}|{start:%H:%M}|{end:%H:%M}|{subject_key or 'unknown'}"
     return f"{hashlib.sha1(raw.encode()).hexdigest()[:16]}@circomedia"
+
+
+def fold_ics_line(line):
+    """RFC 5545 §3.1 folding: max 75 octets per line, continuations start
+    with a space. Never splits a multibyte UTF-8 character. Apple tolerates
+    unfolded lines; Google's importer does not."""
+    raw = line.encode("utf-8")
+    if len(raw) <= 75:
+        return [line]
+    parts = []
+    while raw:
+        take = 75 if not parts else 74
+        if len(raw) <= take:
+            parts.append(raw)
+            break
+        cut = take
+        while cut > 0 and raw[cut] & 0xC0 == 0x80:
+            cut -= 1
+        parts.append(raw[:cut or take])
+        raw = raw[cut or take:]
+    return [parts[0].decode("utf-8")] + [" " + p.decode("utf-8")
+                                         for p in parts[1:]]
 
 
 def fill_rgb(cell):
@@ -130,6 +170,58 @@ def _year_sheet_name(wb, n):
         if s.strip().lower() == f"year {n} groups":
             return s
     return None
+
+
+def slugify(name):
+    """'Dee Dee' -> 'dee-dee'. URL-safe, deterministic, lowercase."""
+    s = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
+    return s or "student"
+
+
+def display_name(lower_name):
+    """Recover a display form from a lowercased roster key."""
+    return " ".join(
+        w[:1].upper() + w[1:] if w else w
+        for w in lower_name.split(" ")
+    )
+
+
+def parse_roster(wb):
+    """Canonical roster from raw year sheets (no Core Skills merge).
+
+    Returns {key: {"name": display, "year": n, "keys": [variant keys]}}.
+    Spelling variants ('farrah' vs 'farrah (minor)', '(james)' vs 'james')
+    merge into one entry; schedule annotations ('friday wk5') are dropped.
+    Core-skills-only names (spelling variants) fall back to year 1;
+    lookup_merged resolves them at build time anyway.
+    """
+    by_norm = {}
+    for n in (1, 2, 3):
+        for key in parse_year_sheet(wb, n):
+            if JUNK_ROSTER_RE.search(key):
+                continue
+            norm = roster_norm(key) or key.lower()
+            e = by_norm.setdefault(norm, {"keys": [], "year": n})
+            if key not in e["keys"]:
+                e["keys"].append(key)
+            e["year"] = min(e["year"], n)
+    core = parse_core_skills(wb)
+    for key in core:
+        if JUNK_ROSTER_RE.search(key):
+            continue
+        norm = roster_norm(key) or key.lower()
+        e = by_norm.setdefault(norm, {"keys": [], "year": 1})
+        if key not in e["keys"]:
+            e["keys"].append(key)
+    out = {}
+    for norm, e in by_norm.items():
+        # Prefer the cleanest key for identity ('farrah' over
+        # 'farrah (minor)'; 'dee dee' over 'deedee').
+        pref = sorted(e["keys"], key=lambda k: ("(" in k, " " not in k, len(k)))[0]
+        clean = re.sub(r"\(.*?\)", "", pref).strip() or pref
+        out[pref] = {"name": display_name(clean.lower()),
+                     "year": e["year"], "keys": sorted(e["keys"])}
+    return out
 
 
 def parse_core_skills(wb):
@@ -216,6 +308,36 @@ def lookup_student(maps, name, start_year=1):
         if name.lower() in m and m[name.lower()]:
             return m[name.lower()], n
     return {}, None
+
+
+def lookup_merged(maps, keys, start_year=1):
+    """lookup_student across spelling variants ('farrah', 'farrah (minor)').
+
+    Same-year variants merge; first year (from start_year) with any match
+    wins. Identical to lookup_student for a single key.
+    """
+    for n in range(start_year, 4):
+        me = {}
+        for k in keys:
+            for subj, grp in maps.get(n, {}).get(k.lower(), {}).items():
+                me.setdefault(subj, grp)
+        if me:
+            return me, n
+    return {}, None
+
+
+# Group-sheet annotations that are schedules, not people.
+JUNK_ROSTER_RE = re.compile(
+    r"monday|tuesday|wednesday|thursday|friday|\bweeks?\b|\bwk\b|\?", re.I)
+
+
+def roster_norm(key):
+    """Identity for entity resolution: 'Farrah (minor)' -> 'farrah'."""
+    k = key.strip()
+    if k.startswith("(") and k.endswith(")"):
+        k = k[1:-1]
+    k = re.sub(r"\(.*?\)", "", k)
+    return re.sub(r"[^a-z0-9]", "", k.lower())
 
 
 def detect_blocks(ws):
@@ -316,6 +438,29 @@ def block_subject_key(texts):
                 "creative project", "devising", "movement", "dance"):
         if key in joined:
             return norm_subject_key(key)
+    return None
+
+
+def pre_dash(text):
+    """Student-name segment of a block text: 'Tan - Jonathan' -> 'Tan'."""
+    return DASH_SPLIT_RE.split(text, maxsplit=1)[0]
+
+
+def is_teacher_list(text):
+    """True for pure multi-name lists ('Lisa, Ethan, Chané')."""
+    parts = [p.strip() for p in TEACHER_LIST_SPLIT_RE.split(text) if p.strip()]
+    return len(parts) >= 2 and all(NAME_LIKE_RE.match(p) for p in parts)
+
+
+def all_years_year(texts):
+    """Year N from 'All Yr N / All Nth years' texts, 'all', or None."""
+    for t in texts:
+        m = ALL_YEAR_RE.search(t)
+        if m:
+            return int(m.group(1))
+    for t in texts:
+        if ALL_YEARS_GENERIC_RE.search(t):
+            return "all"
     return None
 
 
@@ -424,9 +569,20 @@ def monday_from_filename(path):
 
 
 def extract_for_student(wb, name, monday=None, cal_year=2026, cal_month=9,
-                        start_year=1, filename=None):
-    maps = parse_groups(wb)
-    me, matched_year = lookup_student(maps, name, start_year)
+                        start_year=1, filename=None, groups=None,
+                        matched_year=None, aliases=()):
+    if groups is None:
+        maps = parse_groups(wb)
+        groups, matched_year = lookup_student(maps, name, start_year)
+    me = groups
+    # Name candidates for explicit matches: variants plus their
+    # paren-stripped bases ('lewis (nicky)' -> 'lewis').
+    candidates = {name.lower()}
+    for a in aliases:
+        candidates.add(a.lower())
+        base = re.sub(r"\(.*?\)", "", a).strip()
+        if base:
+            candidates.add(base.lower())
     if monday is None and filename:
         monday = monday_from_filename(filename)
     day_sheets = [s for s in wb.sheetnames
@@ -451,27 +607,34 @@ def extract_for_student(wb, name, monday=None, cal_year=2026, cal_month=9,
             if not texts:
                 continue
             skey = block_subject_key(texts)
-            # need some Year-1 signal: yellow header, All Yr1, group, or explicit name
-            named = any(re.search(rf"\b{re.escape(name)}\b", t, re.I) for t in texts)
-            yr1_only = any(re.search(r"all\s*(yr|year)?\s*1|all\s*1st\s*years?", t, re.I)
-                           for t in texts)
-            all_years_generic = any(re.search(r"\ball\s*years\b", t, re.I) for t in texts)
-            # Generic "All years" (e.g. Friday self-led warm-up for Yr 2/3) only
-            # counts when the block header itself is Year-1 yellow. "All Yr 1"
-            # always counts.
-            all1 = yr1_only or (all_years_generic and b["header_yellow"])
+            # need some Year-1 signal: yellow header, All-years, group, or explicit name
             groups_in_block = set()
             for t in texts:
                 for gm in GROUP_RE.finditer(t):
                     groups_in_block.add(f"Group {gm.group(1).upper()}")
-            if not (b["header_yellow"] or all1 or groups_in_block or named):
+            taught_class = bool(groups_in_block) and bool(skey)
+            owners = [t for t in texts if OWNER_RE.match(t)]
+            named = False
+            for t in (owners or texts):
+                seg = pre_dash(t)
+                if taught_class and is_teacher_list(seg):
+                    continue  # 'Lisa, Ethan, Chané': teachers, not students
+                if any(re.search(rf"\b{re.escape(c)}\b", seg, re.I)
+                       for c in candidates):
+                    named = True
+                    break
+            student_year = matched_year or start_year
+            disregards_year = all_years_year(texts)
+            allyear = (disregards_year == student_year
+                       or (disregards_year == "all" and b["header_yellow"]))
+            if not (b["header_yellow"] or allyear or groups_in_block or named):
                 continue
             attend = False
             reason = ""
             if named:
                 attend, reason = True, "named explicitly"
-            elif all1:
-                attend, reason = True, "all-years block"
+            elif allyear:
+                attend, reason = True, f"all year {disregards_year}"
             elif groups_in_block:
                 mine = me.get(skey, "") if skey else ""
                 if skey and mine and mine in groups_in_block:
@@ -577,7 +740,10 @@ def to_ics(events, name):
             "END:VEVENT",
         ]
     lines.append("END:VCALENDAR")
-    return "\r\n".join(lines) + "\r\n"
+    folded = []
+    for line in lines:
+        folded.extend(fold_ics_line(line))
+    return "\r\n".join(folded) + "\r\n"
 
 
 def main():

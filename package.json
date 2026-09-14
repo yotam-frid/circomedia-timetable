@@ -1,0 +1,29 @@
+{
+  "name": "circomedia-timetable",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "build:css": "tailwindcss -i public/styles.css -o public/tailwind.css --minify",
+    "watch:css": "tailwindcss -i public/styles.css -o public/tailwind.css --watch"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yotam-frid/circomedia-timetable.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/yotam-frid/circomedia-timetable/issues"
+  },
+  "homepage": "https://github.com/yotam-frid/circomedia-timetable#readme",
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.3",
+    "tailwindcss": "^4.3.3"
+  }
+}

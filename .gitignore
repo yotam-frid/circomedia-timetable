@@ -1,5 +1,6 @@
 .sharepoint-browser-profile/
 incoming/
+site/
 __pycache__/
 *.pyc
 *.pyo
@@ -8,3 +9,8 @@ sharepoint_state.json
 Term * Old.xlsx
 *.ics.tmp
 .DS_Store
+.env
+
+.vercel
+.env*
+node_modules/

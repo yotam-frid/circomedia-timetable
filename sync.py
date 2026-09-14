@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Fetch, build and publish the timetable calendar feed.
+"""Fetch, build and publish the Circomedia timetable feeds.
 
-Runs locally on the Mac. Pipeline:
+Runs locally on the Mac (SharePoint login only works here). Pipeline:
   1. fetch_sharepoint_timetable.py --all --headless  (download all weeks)
   2. hash incoming xlsx; if unchanged since last build, exit
-  3. build_feed.py -> feed.ics
-  4. git commit + push feed.ics to GitHub Pages
+  3. build_feeds.py -> site/ (per-student feeds + roster + manifest)
+  4. publish.py -> Vercel Blob (only changed files; live in seconds)
 
-GitHub Pages serves feed.ics at https://<user>.github.io/<repo>/feed.ics
-iCloud Calendar subscribes to that URL and polls every 30-60 min.
+No site redeploy is needed for data changes; `vercel deploy` runs only when
+app.py / public/ / requirements.txt change (do that by hand).
 
 Usage:
   python3 sync.py                 # full run with schedule logic
@@ -72,25 +72,11 @@ def should_run(state, force=False):
     return False, f"overnight cooldown (last run {last.isoformat() if last else 'never'})"
 
 
-def git_push_feed(feed_path):
-    """Commit and push feed.ics so GitHub Pages picks it up."""
-    subprocess.run(["git", "add", str(feed_path)], cwd=ROOT, check=True)
-    diff = subprocess.run(["git", "diff", "--cached", "--stat"],
-                          cwd=ROOT, capture_output=True, text=True)
-    if not diff.stdout.strip():
-        print("git: feed.ics already committed")
-        return False
-    msg = f"update feed.ics {london_now().strftime('%Y-%m-%d %H:%M')}"
-    run(["git", "commit", "-m", msg])
-    run(["git", "push", "origin", "main"])
-    return True
-
-
 def main():
-    ap = argparse.ArgumentParser(description="Fetch + build + publish timetable feed")
+    ap = argparse.ArgumentParser(description="Fetch + build + publish timetable feeds")
     ap.add_argument("--force", action="store_true", help="skip schedule/hash checks")
     ap.add_argument("--no-fetch", action="store_true", help="skip SharePoint fetch")
-    ap.add_argument("--no-push", action="store_true", help="skip git push (build only)")
+    ap.add_argument("--no-publish", action="store_true", help="skip blob publish (build only)")
     a = ap.parse_args()
 
     state = {}
@@ -102,26 +88,27 @@ def main():
         print(f"skip: {why}")
         return
 
-    before = incoming_hashes()
     if not a.no_fetch:
         run([sys.executable, "fetch_sharepoint_timetable.py", "--all", "--headless"])
-    after = incoming_hashes()
 
     last_built = state.get("last_built_hashes") or {}
-    if not a.force and after == last_built:
+    if not a.force and incoming_hashes() == last_built:
         state["last_run"] = london_now().isoformat()
         STATE.write_text(json.dumps(state, indent=2))
         print("skip: no incoming xlsx changed since last build")
         return
 
-    run([sys.executable, "build_feed.py", "-o", str(ROOT / "docs" / "feed.ics")])
+    run([sys.executable, "build_feeds.py"])
 
+    # Reload state: build/publish steps don't write it, but keep fresh.
+    if STATE.exists():
+        state = json.loads(STATE.read_text())
     state["last_built_hashes"] = incoming_hashes()
     state["last_run"] = london_now().isoformat()
     STATE.write_text(json.dumps(state, indent=2))
 
-    if not a.no_push:
-        git_push_feed(ROOT / "docs" / "feed.ics")
+    if not a.no_publish:
+        run([sys.executable, "publish.py"])
 
     print("done")
 
