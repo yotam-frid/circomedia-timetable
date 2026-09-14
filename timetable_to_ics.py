@@ -40,7 +40,7 @@ import argparse
 import datetime as dt
 import re
 import sys
-import uuid
+import hashlib
 from pathlib import Path
 
 try:
@@ -56,6 +56,12 @@ WEEK_RE = re.compile(r"weeks?\s*(\d+)", re.I)
 TIME_RANGE_RE = re.compile(r"(\d{1,2})\s*[.:]\s*(\d{2})\s*[-\u2013]\s*(\d{1,2})\s*[.:]\s*(\d{2})")
 GROUP_RE = re.compile(r"Group\s*([ABCD123abcd123])\b")
 DAY_ORDER = ["monday", "tuesday", "wednesday", "thursday", "friday"]
+
+
+def make_uid(date, start, end, subject_key):
+    """Deterministic UID: same logical class always gets the same UID."""
+    raw = f"{date.isoformat()}|{start:%H:%M}|{end:%H:%M}|{subject_key or 'unknown'}"
+    return f"{hashlib.sha1(raw.encode()).hexdigest()[:16]}@circomedia"
 
 
 def fill_rgb(cell):
@@ -444,6 +450,7 @@ def extract_for_student(wb, name, monday=None, cal_year=2026, cal_month=9,
             texts = block_texts(ws, b)
             if not texts:
                 continue
+            skey = block_subject_key(texts)
             # need some Year-1 signal: yellow header, All Yr1, group, or explicit name
             named = any(re.search(rf"\b{re.escape(name)}\b", t, re.I) for t in texts)
             yr1_only = any(re.search(r"all\s*(yr|year)?\s*1|all\s*1st\s*years?", t, re.I)
@@ -466,7 +473,6 @@ def extract_for_student(wb, name, monday=None, cal_year=2026, cal_month=9,
             elif all1:
                 attend, reason = True, "all-years block"
             elif groups_in_block:
-                skey = block_subject_key(texts)
                 mine = me.get(skey, "") if skey else ""
                 if skey and mine and mine in groups_in_block:
                     attend, reason = True, f"{skey} {mine}"
@@ -495,7 +501,7 @@ def extract_for_student(wb, name, monday=None, cal_year=2026, cal_month=9,
                 "date": date, "day": s.strip(), "start": start, "end": end,
                 "name": event_name(texts), "location": b["location"],
                 "teachers": teachers, "reason": reason,
-                "texts": texts,
+                "texts": texts, "subject_key": skey,
             })
     # de-dupe: Gym Bay 1 / Gym Bay 2 are often merged (same block in both
     # columns). Merge events with same date+time+name, combining locations.
@@ -525,21 +531,51 @@ def extract_for_student(wb, name, monday=None, cal_year=2026, cal_month=9,
 
 
 def to_ics(events, name):
-    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//circomedia-timetable//EN",
-             f"X-WR-CALNAME:Circomedia - {name}"]
     now = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//circomedia-timetable//EN",
+        f"X-WR-CALNAME:Circomedia - {name}",
+        "REFRESH-INTERVAL:PT30M",
+        "X-PUBLISHED-TTL:PT30M",
+        "BEGIN:VTIMEZONE",
+        "TZID:Europe/London",
+        "BEGIN:STANDARD",
+        "DTSTART:19701025T020000",
+        "RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10",
+        "TZOFFSETFROM:+0100",
+        "TZOFFSETTO:+0000",
+        "TZNAME:GMT",
+        "END:STANDARD",
+        "BEGIN:DAYLIGHT",
+        "DTSTART:19700329T010000",
+        "RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3",
+        "TZOFFSETFROM:+0000",
+        "TZOFFSETTO:+0100",
+        "TZNAME:BST",
+        "END:DAYLIGHT",
+        "END:VTIMEZONE",
+    ]
     for e in events:
-        uid = f"{uuid.uuid4()}@circomedia"
+        uid = make_uid(e["date"], e["start"], e["end"], e.get("subject_key"))
         desc = ""
         if e["teachers"]:
             desc += "Teacher: " + ", ".join(e["teachers"]) + "\\n"
         desc += f"Matched: {e['reason']}"
-        lines += ["BEGIN:VEVENT", f"UID:{uid}", f"DTSTAMP:{now}",
-                  f"DTSTART:{e['start'].strftime('%Y%m%dT%H%M%S')}",
-                  f"DTEND:{e['end'].strftime('%Y%m%dT%H%M%S')}",
-                  f"SUMMARY:{e['name']}",
-                  f"LOCATION:{e['location']}",
-                  f"DESCRIPTION:{desc}", "END:VEVENT"]
+        lines += [
+            "BEGIN:VEVENT",
+            f"UID:{uid}",
+            f"DTSTAMP:{now}",
+            f"LAST-MODIFIED:{now}",
+            f"SEQUENCE:0",
+            f"DTSTART;TZID=Europe/London:{e['start'].strftime('%Y%m%dT%H%M%S')}",
+            f"DTEND;TZID=Europe/London:{e['end'].strftime('%Y%m%dT%H%M%S')}",
+            f"SUMMARY:{e['name']}",
+            f"LOCATION:{e['location']}",
+            f"DESCRIPTION:{desc}",
+            "END:VEVENT",
+        ]
     lines.append("END:VCALENDAR")
     return "\r\n".join(lines) + "\r\n"
 

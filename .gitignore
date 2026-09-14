@@ -1,0 +1,10 @@
+.sharepoint-browser-profile/
+incoming/
+__pycache__/
+*.pyc
+*.pyo
+.sync_state.json
+sharepoint_state.json
+Term * Old.xlsx
+*.ics.tmp
+.DS_Store

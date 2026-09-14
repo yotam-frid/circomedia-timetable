@@ -25,6 +25,7 @@ LOGIN_URL = (
 # Publishers use both "Week 1 2026" and "Weeks 2" naming conventions.
 TIMETABLE_RE = re.compile(r"^Term .* Weeks? \d+(?: \d{4})?\.xlsx$", re.I)
 PROFILE = Path(".sharepoint-browser-profile")
+STATE_JSON = Path("sharepoint_state.json")
 INCOMING = Path("incoming")
 
 
@@ -41,7 +42,8 @@ def main():
 
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
-            str(PROFILE.resolve()), headless=args.headless, accept_downloads=True
+            str(PROFILE.resolve()), headless=args.headless, accept_downloads=True,
+            storage_state=str(STATE_JSON) if STATE_JSON.exists() else None,
         )
         page = context.pages[0] if context.pages else context.new_page()
         if args.login:
