@@ -159,7 +159,7 @@
         stroke-linecap="round"
         stroke-linejoin="round"
         aria-hidden="true"
-        class="h-5 w-5 text-ink-400 transition-transform duration-200"
+        class="h-5 w-5 cursor-pointer text-ink-400 transition-transform duration-200"
         class:rotate-180={groupsOpen}
       >
         <path d="m6 9 6 6 6-6" />
