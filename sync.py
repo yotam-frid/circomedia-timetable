@@ -58,6 +58,27 @@ def run(cmd):
         sys.exit(f"command failed ({r.returncode}): {' '.join(map(str, cmd))}")
 
 
+def load_state():
+    return json.loads(STATE.read_text()) if STATE.exists() else {}
+
+
+def save_state(state):
+    STATE.write_text(json.dumps(state, indent=2))
+
+
+def is_auth_failure(stderr):
+    return "HTTP 403" in stderr
+
+
+def notify_auth_expired():
+    msg = ("Circomedia sync blocked: SharePoint session expired. "
+           "Re-login with: python3 fetch_sharepoint_timetable.py --login")
+    subprocess.run(
+        ["osascript", "-e", f'display notification "{msg}" with title "Circomedia sync"'],
+        capture_output=True,
+    )
+
+
 def should_run(state, force=False):
     if force:
         return True, "forced"
@@ -79,9 +100,7 @@ def main():
     ap.add_argument("--no-publish", action="store_true", help="skip blob publish (build only)")
     a = ap.parse_args()
 
-    state = {}
-    if STATE.exists():
-        state = json.loads(STATE.read_text())
+    state = load_state()
 
     ok, why = should_run(state, force=a.force)
     if not ok:
@@ -89,7 +108,23 @@ def main():
         return
 
     if not a.no_fetch:
-        run([sys.executable, "fetch_sharepoint_timetable.py", "--all", "--headless"])
+        fetch = [sys.executable, "fetch_sharepoint_timetable.py", "--all", "--headless"]
+        print(f"$ {' '.join(map(str, fetch))}", flush=True)
+        r = subprocess.run(fetch, cwd=ROOT, text=True, capture_output=True)
+        if r.stdout:
+            print(r.stdout.rstrip(), flush=True)
+        if r.stderr:
+            print(r.stderr.rstrip(), file=sys.stderr, flush=True)
+        if r.returncode != 0:
+            if is_auth_failure(r.stderr) and not state.get("auth_notified"):
+                notify_auth_expired()
+                state["auth_notified"] = True
+            state["last_run"] = london_now().isoformat()
+            save_state(state)
+            sys.exit(f"command failed ({r.returncode}): {' '.join(map(str, fetch))}")
+        if state.get("auth_notified"):
+            state["auth_notified"] = False
+            save_state(state)
 
     last_built = state.get("last_built_hashes") or {}
     if not a.force and incoming_hashes() == last_built:
@@ -101,8 +136,7 @@ def main():
     run([sys.executable, "build_feeds.py"])
 
     # Reload state: build/publish steps don't write it, but keep fresh.
-    if STATE.exists():
-        state = json.loads(STATE.read_text())
+    state = load_state()
     state["last_built_hashes"] = incoming_hashes()
     state["last_run"] = london_now().isoformat()
     STATE.write_text(json.dumps(state, indent=2))
