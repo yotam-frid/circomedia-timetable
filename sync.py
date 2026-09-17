@@ -74,7 +74,9 @@ def notify_auth_expired():
     msg = ("Circomedia sync blocked: SharePoint session expired. "
            "Re-login with: python3 fetch_sharepoint_timetable.py --login")
     subprocess.run(
-        ["osascript", "-e", f'display notification "{msg}" with title "Circomedia sync"'],
+        ["osascript", "-e",
+         f'display alert "Circomedia sync" message "{msg}" '
+         'buttons {"OK"} default button "OK"'],
         capture_output=True,
     )
 

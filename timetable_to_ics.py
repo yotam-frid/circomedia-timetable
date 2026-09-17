@@ -1170,6 +1170,12 @@ def extract_for_student(wb, name, monday=None, cal_year=2026, cal_month=9,
                     matched_label = _best_label(my_labels, joined)
                 elif skey in WHOLE_COHORT:
                     attend, reason = True, f"year {student_year} cohort"
+            elif skey in WHOLE_COHORT and not ymarks \
+                    and hdr == student_year and not my_labels:
+                # Labelless whole-cohort subject (Teacher Training): the
+                # header colour is the year signal. Week 1 omits the 'Yr 2'
+                # text that Week 2 carries, so colour alone must grant.
+                attend, reason = True, f"year {student_year} cohort"
             elif par_in_block and skey in ("par_group_1", "par_group_2"):
                 # PAR columns hold a single group each, so subject
                 # membership is the match ('PAR GROUP 2' must never match
