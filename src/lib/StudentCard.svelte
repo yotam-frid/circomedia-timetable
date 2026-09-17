@@ -1,17 +1,15 @@
 <script>
-  import { ArrowLeft, ArrowRight } from "@lucide/svelte";
+  import { ArrowLeft, ArrowRight, ExternalLink } from "@lucide/svelte";
   import {
     prettySubject,
-    copyText,
     parseICS,
     formatDayLabel,
     initialDayIndex,
   } from "$lib/api.js";
 
-  /** Renders a matched student + their schedule and calendar feed links. */
-  let { student } = $props();
+  /** Renders a matched student + their schedule. */
+  let { student, updated } = $props();
 
-  let copied = $state(false);
   let groupsOpen = $state(false);
 
   let calState = $state("loading"); // loading | ready | empty | error
@@ -98,13 +96,6 @@
 
   function nextDay() {
     if (dayIndex < days.length - 1) dayIndex += 1;
-  }
-
-  async function copy() {
-    if (await copyText(student.feed.https)) {
-      copied = true;
-      setTimeout(() => (copied = false), 1500);
-    }
   }
 </script>
 
@@ -204,27 +195,6 @@
       </div>
     </div>
 
-    <div class="flex items-center gap-3 px-4 pb-1">
-      <div class="flex items-center gap-2">
-        <a
-          href={student.feed.webcal}
-          class="relative flex items-center justify-center gap-2 rounded-lg border border-line bg-white px-3 py-1.5 text-sm font-medium text-ink-800 transition hover:border-line-dark hover:bg-cream-50"
-        >
-          <img src="/apple-logo.svg" alt="" class="h-3.5 w-auto" />
-          Apple
-        </a>
-        <a
-          href={student.feed.google}
-          target="_blank"
-          rel="noopener"
-          class="relative flex items-center justify-center gap-2 rounded-lg border border-line bg-white px-3 py-1.5 text-sm font-medium text-ink-800 transition hover:border-line-dark hover:bg-cream-50"
-        >
-          <img src="/google-logo.png" alt="" class="h-3.5 w-auto" />
-          Google
-        </a>
-      </div>
-    </div>
-
     <div class="px-6 pb-2">
       {#if calState === "loading"}
         <p class="py-1.5 text-ink-500">Loading schedule…</p>
@@ -259,27 +229,26 @@
     </div>
   </section>
 
-  <div class="border-t border-line px-6 py-5">
-    <label
-      for="feed-url"
-      class="block text-sm font-medium uppercase tracking-wider text-ink-400"
-    >
-      Private calendar feed
-    </label>
-    <div class="mt-2 flex gap-2">
-      <input
-        id="feed-url"
-        readonly
-        value={student.feed.https}
-        onfocus={(e) => e.currentTarget.select()}
-        class="w-full rounded-xl border border-line bg-cream-50 px-4 py-2.5 font-mono text-sm text-ink-500 outline-none focus:border-coral-500"
-      />
-      <button
-        onclick={copy}
-        class="shrink-0 rounded-xl bg-ink-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-ink-800 focus:outline-none focus-visible:ring-4 focus-visible:ring-coral-500/30"
-      >
-        {copied ? "Copied!" : "Copy"}
-      </button>
+  <div class="border-t border-line px-6 py-4">
+    <div class="flex items-center justify-center gap-3 pb-1">
+      <span class="text-sm text-ink-400">Add to calendar: </span>
+      <div class="flex items-center gap-3">
+        <a
+          href={student.feed.webcal}
+          class="inline-flex items-center gap-1 text-sm font-medium text-ink-400 underline decoration-dashed underline-offset-2 transition hover:text-ink-600"
+          ><ExternalLink class="h-3.5 w-3.5" />Apple
+        </a>
+        <a
+          href={student.feed.google}
+          target="_blank"
+          rel="noopener"
+          class="inline-flex items-center gap-1 text-sm font-medium text-ink-400 underline decoration-dashed underline-offset-2 transition hover:text-ink-600"
+          ><ExternalLink class="h-3.5 w-3.5" />Google
+        </a>
+      </div>
     </div>
+    <p class="text-center text-sm text-ink-400">
+      Updated <span class="text-ink-500">{updated}</span>
+    </p>
   </div>
 </article>

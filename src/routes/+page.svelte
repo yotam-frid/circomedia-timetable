@@ -45,7 +45,7 @@
     {#if result.status !== "empty"}
       <div aria-live="polite" class="mt-2">
         {#if result.status === "match"}
-          <StudentCard student={result.student} />
+          <StudentCard student={result.student} {updated} />
         {:else if result.status === "picker"}
           <StudentPicker matches={result.matches} {onpick} />
         {:else if result.status === "none"}
@@ -70,10 +70,4 @@
       </div>
     {/if}
   </section>
-
-  <footer class="mt-14 border-t border-line py-8 text-center">
-    <p class="text-sm text-ink-400">
-      Updated <span class="text-ink-500">{updated}</span>
-    </p>
-  </footer>
 </main>

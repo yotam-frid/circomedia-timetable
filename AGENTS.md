@@ -78,6 +78,10 @@ back to the store's public URL otherwise, so `pnpm dev` works against live
 Blob data out of the box. (`vercel env pull .env.local` only if you need
 private env values locally; never commit that file.)
 
+**A build is not required after every UI change.** `pnpm dev` hot-reloads
+components, so iterate there; only run `pnpm build` when you need to verify
+the Vercel production build (or before deploying).
+
 ## The matcher (read before touching `timetable_to_ics.py`)
 
 `extract_for_student(wb, name, ...)` — a block belongs to the student if ANY holds:
