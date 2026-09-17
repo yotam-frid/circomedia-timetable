@@ -83,6 +83,40 @@ export async function copyText(t) {
   }
 }
 
+/** localStorage key for the last student whose feed loaded successfully. */
+const LAST_STUDENT_KEY = 'circomedia:last-student';
+
+/** Remember a student name after their feed loads OK.
+ *  Best-effort: no-ops outside the browser or when storage is unavailable. */
+export function saveLastStudent(name) {
+  try {
+    if (typeof localStorage === 'undefined' || !name) return;
+    localStorage.setItem(LAST_STUDENT_KEY, name);
+  } catch {
+    /* private mode etc. — persistence is best-effort */
+  }
+}
+
+/** The remembered student name, or null when there isn't one. */
+export function loadLastStudent() {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    return localStorage.getItem(LAST_STUDENT_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Forget the remembered student (e.g. the search box was cleared). */
+export function clearLastStudent() {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.removeItem(LAST_STUDENT_KEY);
+  } catch {
+    /* noop */
+  }
+}
+
 /** Unescape an ICS property value (\, \; \\ and line-break escapes). */
 function unescapeICS(v) {
   return v
@@ -104,8 +138,13 @@ function parseICSDateTime(v) {
   };
 }
 
+function groupLabel(description) {
+  const m = /Matched:[^\n]*?\b(Group\s+\S+)/.exec(description ?? '');
+  return m ? m[1] : '';
+}
+
 /** Parse an .ics feed into per-day event groups.
- *  Returns [{ key: "2026-09-17", events: [{ start, end, title, location }] }]
+ *  Returns [{ key: "2026-09-17", events: [{ start, end, title, location, group }] }]
  *  sorted chronologically. Times stay wall-clock strings from the feed
  *  (Europe/London), so no timezone shifting is involved. */
 export function parseICS(text) {
@@ -120,13 +159,21 @@ export function parseICS(text) {
         const s = cur.dtstart ? parseICSDateTime(cur.dtstart) : null;
         const e = cur.dtend ? parseICSDateTime(cur.dtend) : null;
         if (s && e) {
+          const titleRaw = cur.summary || 'Class';
+          const group = groupLabel(cur.description);
+          // SUMMARY carries the group suffix ("Core Skills - Handstands
+          // (Group 1)") -- strip it so the card can render it non-bold.
+          const title = group
+            ? titleRaw.replace(new RegExp(`\\s*\\(${group}\\)$`), '').trim()
+            : titleRaw;
           const list = byDay.get(s.dateKey) ?? [];
           list.push({
             start: s.label,
             end: e.label,
             sort: s.minutes,
-            title: cur.summary || 'Class',
-            location: cur.location || ''
+            title,
+            location: cur.location || '',
+            group
           });
           byDay.set(s.dateKey, list);
         }
@@ -141,6 +188,7 @@ export function parseICS(text) {
       else if (name === 'DTEND') cur.dtend = value;
       else if (name === 'SUMMARY') cur.summary = unescapeICS(value);
       else if (name === 'LOCATION') cur.location = unescapeICS(value);
+      else if (name === 'DESCRIPTION') cur.description = unescapeICS(value);
     }
   }
   return [...byDay.entries()]

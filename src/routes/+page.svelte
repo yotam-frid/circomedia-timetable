@@ -2,13 +2,24 @@
   import StudentSearch from "$lib/StudentSearch.svelte";
   import StudentCard from "$lib/StudentCard.svelte";
   import StudentPicker from "$lib/StudentPicker.svelte";
-  import { fetchMeta, formatUpdated, pickStudent } from "$lib/api.js";
+  import {
+    fetchMeta,
+    formatUpdated,
+    pickStudent,
+    searchStudent,
+    loadLastStudent,
+    clearLastStudent,
+  } from "$lib/api.js";
   import { onMount } from "svelte";
 
   let result = $state({ status: "empty" });
   let updated = $state("…");
+  let restoredQuery = $state("");
 
   function onresult(r) {
+    // Clearing the box forgets the remembered student; anything else
+    // leaves it (a match re-saves itself once its feed loads in the card).
+    if (r.status === "empty") clearLastStudent();
     result = r;
   }
 
@@ -19,6 +30,17 @@
   onMount(async () => {
     const meta = await fetchMeta().catch(() => null);
     updated = formatUpdated(meta?.updated_at);
+    // Reload path: jump straight back to the last-seen student.
+    const last = loadLastStudent();
+    if (!last) return;
+    restoredQuery = last;
+    try {
+      const r = await searchStudent(last, { exact: true });
+      if (r.status === "match") result = r;
+    } catch {
+      // Offline on reload — keep the empty state; the stored name is kept
+      // for the next visit.
+    }
   });
 </script>
 
@@ -40,7 +62,7 @@
     {#if result.status === "empty"}
       <span class="max-w-sm mb-4">Enter your <b>first name</b>.</span>
     {/if}
-    <StudentSearch {onresult} />
+    <StudentSearch {onresult} initialQuery={restoredQuery} />
 
     {#if result.status !== "empty"}
       <div aria-live="polite" class="mt-2">

@@ -5,6 +5,7 @@
     parseICS,
     formatDayLabel,
     initialDayIndex,
+    saveLastStudent,
   } from "$lib/api.js";
 
   /** Renders a matched student + their schedule. */
@@ -64,6 +65,9 @@
         if (cancelled) return;
         const parsed = parseICS(text);
         days = parsed;
+        // Feed fetched OK — remember this student for the next visit.
+        // (Empty counts too: the feed exists, there are just no classes.)
+        saveLastStudent(student.name);
         if (!parsed.length) {
           calState = "empty";
         } else {
@@ -267,8 +271,8 @@
                   {/if}
                 </div>
                 <div class="font-bold text-ink-900">
-                  {ev.title}{#if ev.group}
-                    <span class="font-normal text-ink-500">({ev.group})</span
+                  {ev.title}{#if ev.group}{" "}<span
+                    class="font-normal text-ink-500">({ev.group})</span
                     >
                   {/if}
                 </div>

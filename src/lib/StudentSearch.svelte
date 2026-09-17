@@ -2,9 +2,9 @@
   import { searchStudent, pickStudent } from "$lib/api.js";
 
   /** Search box. Emits `result` with the /api/student payload. */
-  let { onresult = () => {} } = $props();
+  let { onresult = () => {}, initialQuery = "" } = $props();
 
-  let query = $state("");
+  let query = $state(initialQuery);
   let searching = $state(false);
   let timer;
 
@@ -26,6 +26,12 @@
     clearTimeout(timer);
     timer = setTimeout(() => run(query.trim()), 300);
   }
+
+  // The restored last-student name arrives async after mount — fill the
+  // box with it (unless the user already typed something).
+  $effect(() => {
+    if (initialQuery && !query) query = initialQuery;
+  });
 
   const searchIcon = "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm10 2-4.35-4.35";
 </script>
