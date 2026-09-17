@@ -1,5 +1,6 @@
 <script>
   import { ArrowLeft, ArrowRight, ExternalLink } from "@lucide/svelte";
+  import { tick } from "svelte";
   import {
     prettySubject,
     parseICS,
@@ -55,6 +56,10 @@
     calState = "loading";
     days = [];
     dayIndex = 0;
+    // Mobile fix: focusing the search box pans the viewport down, leaving
+    // the card half-scrolled. Jump back to the top once per match (this
+    // effect only re-runs when the student changes, not on day toggles).
+    tick().then(() => window.scrollTo(0, 0));
     let cancelled = false;
     fetch(url)
       .then((res) => {
