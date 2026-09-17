@@ -1,4 +1,6 @@
 import { env } from '$env/dynamic/private';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 // Public bucket — the base URL is not secret (objects are world-readable).
 // Env wins when set (Vercel production/preview); fallback keeps `npm run dev`
@@ -7,12 +9,31 @@ export const BLOB_BASE =
   env.BLOB_BASE_URL?.replace(/\/$/, '') ||
   'https://aej7l7keofspndyy.public.blob.vercel-storage.com';
 
-export const ROSTER_TTL = 300; // seconds; roster changes rarely
+// Local-dev escape hatch: point at a build_feeds.py output dir and the server
+// reads roster/manifest/feeds from disk instead of the published Blob store,
+// with the caches below disabled. Production is untouched (env unset there).
+//   python3 build_feeds.py                  # refresh site/ from incoming/
+//   LOCAL_SITE_DIR=$PWD/site pnpm dev
+const SITE_DIR = env.LOCAL_SITE_DIR?.replace(/\/$/, '') || null;
+
+export const ROSTER_TTL = SITE_DIR ? 0 : 300; // seconds; roster changes rarely
 
 const cache = new Map(); // key -> { expires, value }
 
-/** GET a path from the Blob store. Returns { status, etag, body }. */
+/** GET a path from the Blob store (or the local site/ dir).
+ *  Returns { status, etag, body }. */
 export async function blobGet(path, etag = null) {
+  if (SITE_DIR) {
+    try {
+      return {
+        status: 200,
+        etag: null,
+        body: new Uint8Array(await readFile(join(SITE_DIR, path)))
+      };
+    } catch {
+      return { status: 404, etag: null, body: null };
+    }
+  }
   const headers = {};
   if (etag) headers['if-none-match'] = etag;
   const res = await fetch(BLOB_BASE + path, { headers });
@@ -31,20 +52,18 @@ async function cached(key, ttlSeconds, loader) {
   return value;
 }
 
+async function getJson(path) {
+  const { status, body } = await blobGet(path);
+  if (status !== 200 || !body) throw new Error(`${path} unreadable`);
+  return JSON.parse(new TextDecoder().decode(body));
+}
+
 export function getRoster() {
-  return cached('roster', ROSTER_TTL, async () => {
-    const res = await fetch(`${BLOB_BASE}/roster.json`);
-    if (!res.ok) throw new Error(`roster.json -> HTTP ${res.status}`);
-    return res.json();
-  });
+  return cached('roster', ROSTER_TTL, () => getJson('/roster.json'));
 }
 
 export function getManifest() {
-  return cached('manifest', ROSTER_TTL, async () => {
-    const res = await fetch(`${BLOB_BASE}/manifest.json`);
-    if (!res.ok) throw new Error(`manifest.json -> HTTP ${res.status}`);
-    return res.json();
-  });
+  return cached('manifest', ROSTER_TTL, () => getJson('/manifest.json'));
 }
 
 export const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
