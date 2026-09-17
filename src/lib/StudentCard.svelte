@@ -178,8 +178,8 @@
         type="button"
         onclick={prevDay}
         disabled={calState !== "ready" || dayIndex <= 0}
-        aria-label="Previous day"
-        class="rounded-lg px-3 py-1.5 text-xl leading-none transition disabled:cursor-default disabled:text-ink-300 disabled:opacity-40 not-disabled:text-ink-800 not-disabled:hover:bg-cream-100 not-disabled:hover:text-coral-600"
+aria-label="Previous day"
+          class="cursor-pointer rounded-lg px-3 py-1.5 text-xl leading-none transition disabled:cursor-default disabled:text-ink-300 disabled:opacity-40 not-disabled:text-ink-800 not-disabled:hover:bg-cream-100 not-disabled:hover:text-coral-600"
       >
         <ArrowLeft class="h-5 w-5" />
       </button>
@@ -194,12 +194,36 @@
         type="button"
         onclick={nextDay}
         disabled={calState !== "ready" || dayIndex >= days.length - 1}
-        aria-label="Next day"
-        class="rounded-lg px-3 py-1.5 text-xl leading-none transition disabled:cursor-default disabled:text-ink-300 disabled:opacity-40 not-disabled:text-ink-800 not-disabled:hover:bg-cream-100 not-disabled:hover:text-coral-600"
+aria-label="Next day"
+          class="cursor-pointer rounded-lg px-3 py-1.5 text-xl leading-none transition disabled:cursor-default disabled:text-ink-300 disabled:opacity-40 not-disabled:text-ink-800 not-disabled:hover:bg-cream-100 not-disabled:hover:text-coral-600"
       >
         <ArrowRight class="h-5 w-5" />
       </button>
     </div>
+    </div>
+
+    <div class="flex items-center justify-between gap-3 px-6 pb-1">
+      <span class="text-sm font-medium uppercase tracking-wider text-ink-400"
+        >Subscribe</span
+      >
+      <div class="flex items-center gap-2">
+        <a
+          href={student.feed.webcal}
+          class="relative flex items-center justify-center gap-2 rounded-lg border border-line bg-white px-3 py-1.5 text-sm font-medium text-ink-800 transition hover:border-line-dark hover:bg-cream-50"
+        >
+          <img src="/apple-logo.svg" alt="" class="h-3.5 w-auto" />
+          Apple
+        </a>
+        <a
+          href={student.feed.google}
+          target="_blank"
+          rel="noopener"
+          class="relative flex items-center justify-center gap-2 rounded-lg border border-line bg-white px-3 py-1.5 text-sm font-medium text-ink-800 transition hover:border-line-dark hover:bg-cream-50"
+        >
+          <img src="/google-logo.png" alt="" class="h-3.5 w-auto" />
+          Google
+        </a>
+      </div>
     </div>
 
     <div class="px-6 pb-2">
@@ -235,31 +259,6 @@
       {/if}
     </div>
   </section>
-
-  <div class="flex flex-col gap-2 border-t border-line px-6 py-5">
-    <label
-      for="feed-url"
-      class="block text-sm font-medium uppercase tracking-wider text-ink-400"
-    >
-      Get personal calendar
-    </label>
-    <a
-      href={student.feed.webcal}
-      class="relative flex flex-1 items-center justify-center rounded-xl border border-line bg-white px-4 py-3 text-center text-sm font-medium text-ink-800 transition hover:border-line-dark hover:bg-cream-50"
-    >
-      <img src="/apple-logo.svg" alt="" class="absolute left-4 h-4 w-auto" />
-      Add to Apple Calendar
-    </a>
-    <a
-      href={student.feed.google}
-      target="_blank"
-      rel="noopener"
-      class="relative flex flex-1 items-center justify-center rounded-xl border border-line bg-white px-4 py-3 text-center text-sm font-medium text-ink-800 transition hover:border-line-dark hover:bg-cream-50"
-    >
-      <img src="/google-logo.png" alt="" class="absolute left-4 h-4 w-auto" />
-      Add to Google Calendar
-    </a>
-  </div>
 
   <div class="border-t border-line px-6 py-5">
     <label
