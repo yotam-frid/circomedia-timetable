@@ -10,12 +10,44 @@
   /** Renders a matched student + their schedule. */
   let { student, updated } = $props();
 
+  // DEBUG: fixed clock for UI testing (Thu 17 Sep, 10:45).
+  // Revert to the real clock when done: const now = new Date();
+  const now = new Date(2026, 8, 17, 10, 45);
+  const nowKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+
   let groupsOpen = $state(false);
 
   let calState = $state("loading"); // loading | ready | empty | error
   let days = $state([]);
   let dayIndex = $state(0);
   let current = $derived(days[dayIndex]);
+  let visibleEvents = $derived(current ? withGaps(current.events) : []);
+  let isToday = $derived(current?.key === nowKey);
+  // Index of the next class (the single NEXT entry): first non-break
+  // event starting after now. Skips free-time gaps so the label always
+  // lands on the upcoming class, including the first entry of the day.
+  let nextIdx = $derived(
+    isToday
+      ? visibleEvents.findIndex((ev) => {
+          if (ev.free) return false;
+          const s = minutesOf(ev.start);
+          return s != null && s > nowMinutes;
+        })
+      : -1,
+  );
+
+  function isNow(ev) {
+    if (!isToday) return false;
+    const s = minutesOf(ev.start);
+    const e = minutesOf(ev.end);
+    return s != null && e != null && s <= nowMinutes && nowMinutes < e;
+  }
+
+  function minsUntil(ev) {
+    const s = minutesOf(ev.start);
+    return s == null ? null : s - nowMinutes;
+  }
 
   // Refetch the student's .ics feed whenever a different student is shown.
   $effect(() => {
@@ -206,17 +238,35 @@
         <p class="py-1.5 text-ink-500">No scheduled classes</p>
       {:else if current}
         <ul class="divide-y divide-cream-100">
-          {#each withGaps(current.events) as ev (`${ev.start}-${ev.end}-${ev.title}-${ev.location}-${ev.free}`)}
-            <li class="py-2.5">
+          {#each visibleEvents as ev, idx (`${ev.start}-${ev.end}-${ev.title}-${ev.location}-${ev.free}`)}
+            {@const live = isNow(ev)}
+            {@const mins = idx === nextIdx ? minsUntil(ev) : null}
+            <li
+              class={live
+                ? "-mx-2 rounded-lg bg-coral-100/60 px-2 py-2.5"
+                : "py-2.5"}
+            >
               {#if ev.free}
                 <div class="text-xs text-ink-400">
                   {ev.start}-{ev.end}
                   <span class="text-ink-500"
                     >{durationLabel(ev.start, ev.end)}</span
                   >
+                  {#if live}
+                    <span class="font-semibold text-coral-600">now</span>
+                  {/if}
                 </div>
               {:else}
-                <div class="text-xs text-ink-400">{ev.start}-{ev.end}</div>
+                <div class="text-xs text-ink-400">
+                  {ev.start}-{ev.end}
+                  {#if live}
+                    <span class="font-semibold text-coral-600">now</span>
+                  {:else if mins != null && mins < 60}
+                    <span class="font-semibold text-coral-600"
+                      >in {mins}min</span
+                    >
+                  {/if}
+                </div>
                 <div class="font-bold text-ink-900">{ev.title}</div>
                 {#if ev.location}
                   <div class="text-ink-500">{ev.location}</div>
