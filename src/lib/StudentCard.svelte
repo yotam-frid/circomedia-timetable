@@ -10,9 +10,7 @@
   /** Renders a matched student + their schedule. */
   let { student, updated } = $props();
 
-  // DEBUG: fixed clock for UI testing (Thu 17 Sep, 10:45).
-  // Revert to the real clock when done: const now = new Date();
-  const now = new Date(2026, 8, 17, 10, 45);
+  const now = new Date();
   const nowKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
@@ -109,17 +107,18 @@
     return out;
   }
 
+  function spanLabel(mins) {
+    if (mins < 60) return `${mins}min`;
+    const h = Math.floor(mins / 60);
+    const rest = mins % 60;
+    return rest === 0 ? `${h}hr` : `${h}hr ${rest}min`;
+  }
+
   function durationLabel(start, end) {
     const s = minutesOf(start);
     const e = minutesOf(end);
     if (s == null || e == null || e <= s) return "break";
-    const mins = e - s;
-    if (mins < 60) return `${mins}min break`;
-    const h = Math.floor(mins / 60);
-    const rest = mins % 60;
-    return rest === 0
-      ? `${h}hr break`
-      : `${h}.${String(rest).padStart(2, "0")}hr break`;
+    return `${spanLabel(e - s)} break`;
   }
 
   function prevDay() {
@@ -261,13 +260,18 @@
                   {ev.start}-{ev.end}
                   {#if live}
                     <span class="font-semibold text-coral-600">now</span>
-                  {:else if mins != null && mins < 60}
+                  {:else if mins != null && mins < 240}
                     <span class="font-semibold text-coral-600"
-                      >in {mins}min</span
+                      >in {spanLabel(mins)}</span
                     >
                   {/if}
                 </div>
-                <div class="font-bold text-ink-900">{ev.title}</div>
+                <div class="font-bold text-ink-900">
+                  {ev.title}{#if ev.group}
+                    <span class="font-normal text-ink-500">({ev.group})</span
+                    >
+                  {/if}
+                </div>
                 {#if ev.location}
                   <div class="text-ink-500">{ev.location}</div>
                 {/if}
