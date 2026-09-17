@@ -30,30 +30,19 @@ import timetable_to_ics as tt
 
 LONDON = ZoneInfo("Europe/London")
 
-DAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri"]
-
 # Feeds with fewer events than this are suspicious (a real student week has
 # Core Skills alone at 4+); listed on stderr for human review, never fatal.
 THIN_THRESHOLD = 8
 
 
 def display_groups(me):
-    """Detail dicts -> card strings: 'Group B', 'Billie (Wed)',
-    'All + Group B'. Single labels with partial weekdays gain their days."""
+    """Detail dicts -> card strings: 'Group B', 'Billie', 'All + Group B'.
+    Weekday annotations are omitted; the feed already carries the days."""
     out = {}
     for s in sorted(me):
         d = me[s]
         labels = d.get("labels", [])
-        det = d.get("detail", {})
-
-        def fmt(lab):
-            wds = sorted(det.get(lab, []))
-            if wds and len(wds) < 5:
-                return f"{lab} ({'/'.join(DAY_SHORT[w] for w in wds)})"
-            return lab
-
-        out[s] = fmt(labels[0]) if len(labels) == 1 else " + ".join(
-            fmt(lab) for lab in labels)
+        out[s] = labels[0] if len(labels) == 1 else " + ".join(labels)
     return out
 
 
