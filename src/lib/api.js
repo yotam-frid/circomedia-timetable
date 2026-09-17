@@ -138,9 +138,41 @@ function parseICSDateTime(v) {
   };
 }
 
-function groupLabel(description) {
+/** Weekday shortening for group names: "Wednesday" -> "Wed",
+ *  "Monday + Tuesday + Wednesday" -> "Mon + Tue + Wed". Already-short
+ *  names pass through untouched. */
+const WEEKDAY_SHORT = {
+  monday: 'Mon',
+  tuesday: 'Tue',
+  wednesday: 'Wed',
+  thursday: 'Thu',
+  friday: 'Fri',
+  saturday: 'Sat',
+  sunday: 'Sun'
+};
+
+function shortenWeekdays(s) {
+  return (s ?? '').replace(
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?\b/gi,
+    (m) => WEEKDAY_SHORT[m.toLowerCase().replace(/s$/, '')] ?? m
+  );
+}
+
+function groupLabel(description, summary) {
   const m = /Matched:[^\n]*?\b(Group\s+\S+)/.exec(description ?? '');
-  return m ? m[1] : '';
+  if (m) return shortenWeekdays(m[1]);
+  // Day-identified groups ("Clown (Wednesday)", "Clown (Wed)") carry the
+  // weekday in the SUMMARY suffix instead of the Matched reason.
+  const t = /\(([^)]+)\)\s*$/.exec(summary ?? '');
+  if (
+    t &&
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)s?\b/i.test(
+      t[1]
+    )
+  ) {
+    return shortenWeekdays(t[1].trim());
+  }
+  return '';
 }
 
 /** Parse an .ics feed into per-day event groups.
@@ -160,11 +192,17 @@ export function parseICS(text) {
         const e = cur.dtend ? parseICSDateTime(cur.dtend) : null;
         if (s && e) {
           const titleRaw = cur.summary || 'Class';
-          const group = groupLabel(cur.description);
+          const group = groupLabel(cur.description, titleRaw);
           // SUMMARY carries the group suffix ("Core Skills - Handstands
-          // (Group 1)") -- strip it so the card can render it non-bold.
+          // (Group 1)", "Clown (Wed)") -- strip it so the card can render
+          // it non-bold. The suffix may still use the full weekday name
+          // in feeds built before the shortening, so compare shortened.
           const title = group
-            ? titleRaw.replace(new RegExp(`\\s*\\(${group}\\)$`), '').trim()
+            ? titleRaw
+                .replace(/\s*\(([^)]+)\)\s*$/, (full, inner) =>
+                  shortenWeekdays(inner.trim()) === group ? '' : full
+                )
+                .trim()
             : titleRaw;
           const list = byDay.get(s.dateKey) ?? [];
           list.push({

@@ -89,6 +89,8 @@ ALL_YEARS_GENERIC_RE = re.compile(r"\ball\s+years\b", re.I)
 # 'Year 2', 'Yr 2', 'YRs' markers (Teacher Training, Manipulation...).
 YEAR_MARK_RE = re.compile(r"\by(?:ea)?rs?\s*([123])\b", re.I)
 DAY_ORDER = ["monday", "tuesday", "wednesday", "thursday", "friday"]
+DAY_SHORT = {"monday": "Mon", "tuesday": "Tue", "wednesday": "Wed",
+             "thursday": "Thu", "friday": "Fri"}
 DAY_RE = re.compile(r"monday|tuesday|wednesday|thursday|friday", re.I)
 DAY_PLURAL_FIX = re.compile(r"fridays", re.I)
 
@@ -330,20 +332,20 @@ MERGE_MAP = {
 def parse_year_maps(wb):
     """{1: people, 2: people, 3: people} without Core Skills merge.
 
-    Year 3 is parsed with the full cross-sheet verify set (Core + Year 1/2
-    rows + Year 3 membership rows) so row5 peer-names (Billie, Pipper,
-    ...) resolve as first members rather than vanishing.
+    Two passes: first collect rows-6+ names everywhere (plus Core Skills),
+    then re-parse with the full verify set so row5 peer-names (Billie,
+    Pipper, Bee, James, ...) resolve as first members rather than
+    vanishing. Cheap (workbook already in memory) and robust to new
+    teacher-named columns.
     """
     core = parse_core_skills(wb)
     verify = set(core)
-    prelim = {}
-    for n in (1, 2):
-        people, rownames = parse_year_sheet(wb, n)
-        prelim[n] = people
+    for n in (1, 2, 3):
+        _, rownames = parse_year_sheet(wb, n)
         verify |= {roster_norm(x) or x.lower() for x in rownames}
-    _, r3 = parse_year_sheet(wb, 3)
-    verify |= {roster_norm(x) or x.lower() for x in r3}
-    prelim[3], _ = parse_year_sheet(wb, 3, verify=verify)
+    prelim = {}
+    for n in (1, 2, 3):
+        prelim[n], _ = parse_year_sheet(wb, n, verify=verify)
     return prelim, core
 
 
@@ -559,6 +561,22 @@ def parse_year_sheet(wb, n, verify=frozenset()):
             lab = col_label[c]
             gm = GROUP_RE.search(lab)
             labels.append(f"Group {gm.group(1).upper()}" if gm else lab)
+        elif (roster_norm(col_label[c]) or col_label[c].lower()) \
+                in verify_all or col_label[c].lower() in TEACHERS:
+            # Person-named columns are never named after the person: the
+            # row5 name (Jasmine, Bee, Billie, Pipper, ...) is just its
+            # first member. Year-2-style day-identified groups take the
+            # weekday (Mon Clown, Wed Conditioning, ...); PAR
+            # takes its header number (Group 1 / Group 2). Year-3 company
+            # columns (Billie, Pipper, ...) likewise resolve to the days
+            # they meet -- leads are members, not group names.
+            # (Non-persons like 'All' fall through and keep their
+            # descriptor. Year 1 has no peer columns.)
+            if key in ("par_group_1", "par_group_2"):
+                labels.append(f"Group {key[-1]}")
+            else:
+                labels.extend(DAY_SHORT[DAY_ORDER[d]]
+                              for d in sorted(days))
         else:  # peer: label AND first member if verifiably a student
             lab = col_label[c]
             labels.append(lab)
@@ -579,7 +597,8 @@ def parse_year_sheet(wb, n, verify=frozenset()):
         if kind == "peer":
             lab = col_label[c]
             if (roster_norm(lab) or lab.lower()) in verify_all:
-                add(lab.lower(), key, lab, days)
+                for dl in labels:
+                    add(lab.lower(), key, dl, days)
     return people, rownames
 
 

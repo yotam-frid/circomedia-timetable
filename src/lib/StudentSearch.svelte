@@ -28,9 +28,14 @@
   }
 
   // The restored last-student name arrives async after mount — fill the
-  // box with it (unless the user already typed something).
+  // box with it exactly once, then never touch the input again (so the
+  // user's own typing/clearing is never overwritten).
+  let initialApplied = false;
   $effect(() => {
-    if (initialQuery && !query) query = initialQuery;
+    if (!initialApplied && initialQuery) {
+      initialApplied = true;
+      if (!query) query = initialQuery;
+    }
   });
 
   const searchIcon = "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm10 2-4.35-4.35";
@@ -63,5 +68,41 @@
     >
       Searching…
     </span>
+  {:else if query}
+    <button
+      type="button"
+      aria-label="Clear search"
+      class="absolute right-4 top-1/2 h-5 w-5 -translate-y-1/2 cursor-pointer text-ink-300 transition hover:text-ink-500"
+      onclick={() => {
+        query = "";
+        run("");
+      }}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M18 6 6 18M6 6l12 12" />
+      </svg>
+    </button>
   {/if}
 </div>
+
+<style>
+  /* Hide the browser-native search clear button (WebKit/Edge) so only
+     our custom X shows. */
+  input[type="search"]::-webkit-search-cancel-button,
+  input[type="search"]::-webkit-search-decoration {
+    -webkit-appearance: none;
+    appearance: none;
+    display: none;
+  }
+  input[type="search"]::-ms-clear {
+    display: none;
+  }
+</style>

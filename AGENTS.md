@@ -95,7 +95,7 @@ the Vercel production build (or before deploying).
 3. **Group match**, subject-scoped and multi-label: `Group X` labels strict (PAR GROUP N matches PAR subjects only, never plain `Group N`); unmarked sessions in the student's colour match on the column weekday their group meets (`Acro | Lisa and Ethan`, `Stand up | Angie`, `Clown | George`); dashless `2.15 3.30` sub-headers split blocks (Thu Acro minors).
    Subjects include `teacher_training` (whole Year-2 cohort, `Jono`), `clown`, `stand_up`, `context2`/`context3` (split from `context1`; `Pro Tour` → context3), `par_group_1/2`, and `PT` → physical_theatre. `PT Minors | research & materials | On teams` is helper text inside the PAR slot, not a session.
 
-Roster (`parse_roster`): union of raw year sheets, NO Core-Skills merge for attribution. Row5 is a true label only when **bold** (`Group 1`, `Major`); an unbolded row5 person-name is the column's **first member** iff verifiably a student elsewhere (`Billie`, `James`, `Bee`…), otherwise a staff/apparatus descriptor granting nothing. Apparatus bookings (`X - Hoop`, `&` duets, `?` garble, week notes) never mint students. Spelling variants merge by `roster_norm` (`farrah (minor)`→`farrah`); nicknames merge by `MERGE_MAP` (`pip`→`pipper`, `fin`→`finley`, `meg`→`megan`, `maddie`→`madeline`, `jj`→`jjangel` displayed `JJ Angel`); junk dropped. `lookup_merged` unions variant groups within the matched year. Slugs via `slugify`, collision-safe (`-2` suffix).
+Roster (`parse_roster`): union of raw year sheets, NO Core-Skills merge for attribution. Row5 is a true label only when **bold** (`Group 1`, `Major`, `All`, `Minors`); an unbolded row5 person-name is the column's **first member** iff verifiably a student elsewhere (`Billie`, `James`, `Bee`…), otherwise a staff/apparatus descriptor granting nothing. Person names are NEVER group labels: day-identified columns take the weekday (`Monday` Clown, `Wednesday` Conditioning, `Wednesday + Friday` Manipulation), PAR takes its header number (`Group 1` / `Group 2`, displayed under subject `PAR`). Whole-cohort single-group subjects (`movement`/`context2`/`conditioning` in Year 2, `context3` in Year 3) are hidden from cards but still match events. Apparatus bookings (`X - Hoop`, `&` duets, `?` garble, week notes) never mint students. Spelling variants merge by `roster_norm` (`farrah (minor)`→`farrah`); nicknames merge by `MERGE_MAP` (`pip`→`pipper`, `fin`→`finley`, `meg`→`megan`, `maddie`→`madeline`, `jj`→`jjangel` displayed `JJ Angel`); junk dropped. `lookup_merged` unions variant groups within the matched year. Slugs via `slugify`, collision-safe (`-2` suffix).
 
 ICS output: deterministic UIDs (`sha1(date|start|end|subject)@circomedia`), `SEQUENCE:0` always, `REFRESH-INTERVAL:PT30M`, Europe/London VTIMEZONE, **RFC 5545 line folding** (Google rejects unfolded lines; Apple doesn't care).
 
@@ -125,10 +125,62 @@ ICS output: deterministic UIDs (`sha1(date|start|end|subject)@circomedia`), `SEQ
   Framework Preset to **SvelteKit** (or redeploy once and let auto-detect kick
   in); otherwise the build will try to serve deleted `app.py`.
 - **`.env.local` OIDC token expires** — `publish.py` auto-refreshes via `vercel env pull` on auth failure. Don't commit `.env.local` (gitignored via `.env*`).
-- **`vercel env add` needs `--value ... --yes`** for non-interactive use; preview envs need no branch flag when passed this way.
 - **`vercel blob put` needs `--allow-overwrite true`** for stable-pathname updates, plus sourced OIDC env when run outside `publish.py`.
 - **`+layout.svelte` uses legacy `<slot />`**, not Svelte 5 `{@render children()}`.
   Works (compat mode, build is green) — don't "fix" it piecemeal; convert only
   if touching the layout anyway.
 - **Don't touch `/opt/circomedia` dependencies**: the Hetzner box project copy is scrapped, but `bot@*.service` units there are someone else's — never touch.
 - No commits unless the user asks.
+
+## Lessons learned (2026-09-17 rebuild — read before re-deriving any of this)
+
+- **Colour is load-bearing; read the legend, not just yellow.** Years are
+  yellow/blue/orange per the Monday `Key` swatches (`parse_legend`, per file).
+  Year-2 blue is a *theme* tint — compare `(theme, idx, tint)` tuples, never
+  raw RGB (a naive reader reports it as unfilled). BTEC orange, Diploma pink,
+  hire-blue and first-aider pink are cohort colours that must never match by
+  year/group; pink doubles as the 1-to-1 colour (named matching stays
+  colour-blind). A session's colour answers "which year?" better than its text.
+- **Row-5 formatting carries semantics.** Bold row5 = group label (`Group 1`,
+  `Major`); unbolded row5 person-name = the column's *first member* (the
+  sheets use a peer-group model: Billie/Pipper/DeeDee/James/Bee head their
+  own columns). Staff-only names and apparatus notes in row5 grant nothing.
+  This was confirmed from formatted screenshots, not guessed — when the parse
+  is ambiguous, ask for one.
+- **Helper text is not a session.** `PT Minors | research & materials | On
+  teams` sits uncoloured inside the orange PAR slot: annotation, no events.
+  Rule of thumb: slot identity comes from header colour + primary subject
+  structure; stray body lines grant no attendance (subject-scoped matching
+  enforces this for free).
+- **Booking cells mint phantom students.** `X - Hoop/Rod`, `straps`/`rope`
+  cells, `&` duets, `?` garble, `need X,` roster notes and teacher names in
+  apparatus columns all look like members to a naive parser. Filters live in
+  `_cell_is_junk` + `_row5_kind` + the apparatus regex; the `THIN:` stderr
+  report in `build_feeds.py` (< 8 events) is the tripwire — advisory, never
+  fatal. Teacher-names-that-are-only-teachers (Janine/Nicky/Joe/Lewis,
+  Jonathan-as-student) die here too: anyone absent from every all-hands
+  column (Context3/PT-Wed/PAR/Core) is not a Year-3 student.
+- **Nicknames need explicit merges.** Core-Skills shorthand (`Pip`, `Fin`),
+  apparatus-tied spellings and splits (`Maddie`/`Madeline`, `Meg`/`Megan`,
+  `JJ`/`JJ Angel`) go in `MERGE_MAP` + `DISPLAY_OVERRIDES`; merged-away keys
+  must never win display (`_merged_away`). Single-subject roster entries are
+  guilty until proven innocent.
+- **Time handling has three traps.** Dashless sub-headers (`2.15 3.30`,
+  Thu Acro minors) must split blocks; names embedded in time-header cells
+  (`... Kitty - Jonathan`) must be recovered, not discarded with the header;
+  and NEVER guess pm from row position — a dense morning column sits low on
+  the sheet, and 11.45am misread as 23:45 silently drops the session
+  (`end <= start` → `continue` with no warning). `block_times` rolls hours
+  < 8 forward by construction; only reinterpret as pm when the straight
+  parse is impossible.
+- **Shared slots need per-attendee titles.** `Lucy - Joe | Tan - Jonathan`
+  in one slot produced `Lucy - Joe` in Tan's feed; title from the attendee's
+  own segment when a block holds several 1-to-1s.
+- **Week files legitimately differ.** Valkyrie does Clown in Week 1 but not
+  Week 2 (cast churn, plus `need X,` editing notes) — week-faithful output,
+  not a bug to "fix". The `Martha` sheet (a real Year-2 personal timetable)
+  is useful ground truth; Movement/Context-2 sessions appear there but were
+  never put on the day sheets, so those feeds are correctly sparse.
+- **Validate like this:** Yotam tuple-diff (DTSTART/SUMMARY/LOCATION, must be
+  empty), THIN report empty, CONFLICTs all human-plausible (1-to-1 vs group),
+  rebuild idempotent (0 files rewritten), `pnpm build` green.

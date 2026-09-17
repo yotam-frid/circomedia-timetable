@@ -20,6 +20,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -35,14 +36,34 @@ LONDON = ZoneInfo("Europe/London")
 THIN_THRESHOLD = 8
 
 
-def display_groups(me):
-    """Detail dicts -> card strings: 'Group B', 'Billie', 'All + Group B'.
-    Weekday annotations are omitted; the feed already carries the days."""
+# Whole-cohort single-group subjects: every student of the year is in the
+# one group, so the line carries no information (events are unaffected).
+# Circomedia's group naming is inconsistent; this list is curated.
+HIDE_SUBJECTS = {(2, "movement"), (2, "context2"), (2, "conditioning"),
+                 (3, "context3")}
+
+
+def display_groups(me, year):
+    """Detail dicts -> card strings: 'Group B', 'Group 1', 'All + Group B',
+    'Monday', 'Wednesday + Friday'. PAR subjects display as subject 'par'
+    with their header group ('Group 1'/'Group 2'). Whole-cohort lines and
+    person-named groups never surface (matching uses days/labels anyway).
+    A label subsumed by another ('Major' inside 'Major + Minor') is
+    dropped from display (matching still uses both)."""
     out = {}
     for s in sorted(me):
+        if (year, s) in HIDE_SUBJECTS:
+            continue
         d = me[s]
         labels = d.get("labels", [])
-        out[s] = labels[0] if len(labels) == 1 else " + ".join(labels)
+        if s in ("par_group_1", "par_group_2"):
+            out["par"] = f"Group {s[-1]}"
+            continue
+        shown = [l for l in labels
+                 if not any(m != l and re.search(
+                     r"\b" + re.escape(l) + r"\b", m, re.I)
+                     for m in labels)]
+        out[s] = shown[0] if len(shown) == 1 else " + ".join(shown)
     return out
 
 
@@ -142,7 +163,7 @@ def main():
     for key in roster:
         me_last, _ = tt.lookup_merged(
             last_maps, roster[key]["keys"], roster[key]["year"])
-        latest_groups[key] = display_groups(me_last)
+        latest_groups[key] = display_groups(me_last, roster[key]["year"])
 
     manifest_feeds = {}
     event_counts = {}
