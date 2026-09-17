@@ -82,15 +82,16 @@ private env values locally; never commit that file.)
 
 `extract_for_student(wb, name, ...)` — a block belongs to the student if ANY holds:
 
-1. **Named explicitly** — with three guards:
+1. **Named explicitly** — with guards:
    - only the **pre-dash** segment counts (`Tan - Jonathan` = Tan's lesson; hyphenated surnames like `Mark Parfitt-Jones` are never split);
-   - pure **teacher lists** (`Lisa, Ethan, Chané`, `Nicky and Janine`) never count when the block has a subject;
+   - staff segments never count: exact staff names, all-teacher lists when the block has a subject (`Lisa, Ethan, Chané`), multi-word staff names as substrings (`Charlie White` ≠ student Charlie), parenthesised credits (`Ethan (& Lisa)`);
    - `Name (Tag)` **owner blocks** (`Charlie (Creative)` + `Jonathan`) match only the owner — the extra name is the tutor.
-   - Matching tries all spelling **aliases** + paren-stripped bases (`lewis (nicky)` → `lewis`).
-2. **All-years, year-aware**: `All Yr N` / `All Nth years` matches iff student's year == N (`matched_year or start_year`). Generic `All years` needs a yellow header. (History: this used to match Year-1 blocks for EVERYONE — fixed.)
-3. **Group match** for the block's subject, incl. substring fallback for non-`Group X` labels (`Major`, `Billie`, teacher-named Year-3 groups like `Nicky`).
+   - Matching tries all spelling **aliases** + paren-stripped bases. Names hidden inside time-header cells are recovered (`Joanna- Aimee 12.45 - 1.30 Kitty - Jonathan`); shared 1-to-1 slots are titled per attendee (`Lucy - Joe | Tan - Jonathan`).
+2. **Year scope**: header colour-year from the sheet legend (`parse_legend`, theme fills resolved — yellow=Year 1, blue=Year 2, orange=Year 3) plus `All Yr N` / `All Nth years` / `Year N` / `YR N` text markers, matched against `matched_year or start_year`. BTEC / Diploma / external-hire colours never match by year or group (1-to-1s still match by name). Generic `All years` stays Year-1-only. (History: this used to match Year-1 blocks for EVERYONE — fixed.)
+3. **Group match**, subject-scoped and multi-label: `Group X` labels strict (PAR GROUP N matches PAR subjects only, never plain `Group N`); unmarked sessions in the student's colour match on the column weekday their group meets (`Acro | Lisa and Ethan`, `Stand up | Angie`, `Clown | George`); dashless `2.15 3.30` sub-headers split blocks (Thu Acro minors).
+   Subjects include `teacher_training` (whole Year-2 cohort, `Jono`), `clown`, `stand_up`, `context2`/`context3` (split from `context1`; `Pro Tour` → context3), `par_group_1/2`, and `PT` → physical_theatre. `PT Minors | research & materials | On teams` is helper text inside the PAR slot, not a session.
 
-Roster (`parse_roster`): union of raw year sheets, NO Core-Skills merge for attribution. Spelling variants merge by `roster_norm` (`farrah (minor)`→`farrah`); junk dropped (weekday names, `week`/`wk`, `?` garble). `lookup_merged` unions variant groups within the matched year. Slugs via `slugify`, collision-safe (`-2` suffix).
+Roster (`parse_roster`): union of raw year sheets, NO Core-Skills merge for attribution. Row5 is a true label only when **bold** (`Group 1`, `Major`); an unbolded row5 person-name is the column's **first member** iff verifiably a student elsewhere (`Billie`, `James`, `Bee`…), otherwise a staff/apparatus descriptor granting nothing. Apparatus bookings (`X - Hoop`, `&` duets, `?` garble, week notes) never mint students. Spelling variants merge by `roster_norm` (`farrah (minor)`→`farrah`); nicknames merge by `MERGE_MAP` (`pip`→`pipper`, `fin`→`finley`, `meg`→`megan`, `maddie`→`madeline`, `jj`→`jjangel` displayed `JJ Angel`); junk dropped. `lookup_merged` unions variant groups within the matched year. Slugs via `slugify`, collision-safe (`-2` suffix).
 
 ICS output: deterministic UIDs (`sha1(date|start|end|subject)@circomedia`), `SEQUENCE:0` always, `REFRESH-INTERVAL:PT30M`, Europe/London VTIMEZONE, **RFC 5545 line folding** (Google rejects unfolded lines; Apple doesn't care).
 
@@ -102,9 +103,11 @@ ICS output: deterministic UIDs (`sha1(date|start|end|subject)@circomedia`), `SEQ
 - **Yotam's feed is the validated reference**: `build_feed.py` (legacy single-student script, still in repo) output must equal `site/feeds/yotam.ics` event-for-event after any matcher change. Check with the DTSTART/SUMMARY/LOCATION tuple diff.
 - **CONFLICT lines on stderr are the impossibility guard** (one student, two places at once). They shout; they don't fail the build.
 
-## Known limitations (as of 2026-09-14)
+## Known limitations (as of 2026-09-17, after the Year 2/3 matcher rebuild)
 
-- **~15 overlaps remain in 5 feeds** (charlie, jonathan, janine, nicky + 1): Year-3 teacher-named groups, Majors/Minors axis, PAR-vs-group overlaps, `Charlie (Creative)` possibly belonging to a different Charlie. Matcher rules were validated for Year 1 only — verify with those classmates before announcing.
+- Remaining CONFLICTs are genuine 1-to-1-vs-group overlaps (Charlie's straps/creative vs Conditioning/PT; Joanna/Nem/Oakley Joe-1-to-1s vs Friday PAR practice). The guard shouts; humans resolve.
+- Week 2 has no Year-2 conditioning session (Week 1's `Conditioning | All 2nd Year` vanished) and no Movement / Context 2 blocks exist in either week — those feeds are correctly sparse, not broken. Flag to whoever makes the spreadsheet.
+- `Charlie (Creative)` possibly belonging to a different Charlie; pink 1-to-1 colour treated as session colour (named matching is colour-blind, so they land regardless).
 - Mac asleep/off = no publishes (accepted; SharePoint login can't move server-side).
 - Google's URL-importer caches failed fetches for hours and can take ~12h to first populate. If it errors, retry later or use Settings → Add calendar → From URL.
 - Function CDN caches feeds 300s (`s-maxage`); blob objects 300s (`cache-control-max-age`). Worst-case publish→visible lag ≈ 5 min + client's own poll (≤60 min). Fine for the 10am-change case.

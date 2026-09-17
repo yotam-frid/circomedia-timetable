@@ -35,7 +35,18 @@ export function formatUpdated(iso) {
 
 /** "aerial_conditioning" -> "Aerial Conditioning", "context1" -> "Context 1". */
 export function prettySubject(key) {
-  if (key === 'context1') return 'Context 1';
+  const pretty = {
+    context1: 'Context 1',
+    context2: 'Context 2',
+    context3: 'Context 3',
+    teacher_training: 'Teacher Training',
+    stand_up: 'Stand Up',
+    clown: 'Clown',
+    par_group_1: 'PAR Group 1',
+    par_group_2: 'PAR Group 2',
+    par: 'PAR'
+  };
+  if (key in pretty) return pretty[key];
   return key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 

@@ -30,6 +30,32 @@ import timetable_to_ics as tt
 
 LONDON = ZoneInfo("Europe/London")
 
+DAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+
+# Feeds with fewer events than this are suspicious (a real student week has
+# Core Skills alone at 4+); listed on stderr for human review, never fatal.
+THIN_THRESHOLD = 8
+
+
+def display_groups(me):
+    """Detail dicts -> card strings: 'Group B', 'Billie (Wed)',
+    'All + Group B'. Single labels with partial weekdays gain their days."""
+    out = {}
+    for s in sorted(me):
+        d = me[s]
+        labels = d.get("labels", [])
+        det = d.get("detail", {})
+
+        def fmt(lab):
+            wds = sorted(det.get(lab, []))
+            if wds and len(wds) < 5:
+                return f"{lab} ({'/'.join(DAY_SHORT[w] for w in wds)})"
+            return lab
+
+        out[s] = fmt(labels[0]) if len(labels) == 1 else " + ".join(
+            fmt(lab) for lab in labels)
+    return out
+
 
 def find_weeks(incoming):
     files = [p for p in sorted(incoming.iterdir())
@@ -127,9 +153,10 @@ def main():
     for key in roster:
         me_last, _ = tt.lookup_merged(
             last_maps, roster[key]["keys"], roster[key]["year"])
-        latest_groups[key] = {s: me_last[s] for s in sorted(me_last)}
+        latest_groups[key] = display_groups(me_last)
 
     manifest_feeds = {}
+    event_counts = {}
     built = 0
     for key in sorted(roster):
         info = roster[key]
@@ -147,6 +174,7 @@ def main():
             seen[tt.make_uid(e["date"], e["start"], e["end"],
                              e.get("subject_key"))] = e
         unique = [seen[k] for k in sorted(seen)]
+        event_counts[slug] = len(unique)
         ics = tt.to_ics(unique, info["name"])
         dest = feeds_dir / f"{slug}.ics"
         # Manifest tracks schedule content only (stamps excluded), so it is
@@ -176,6 +204,13 @@ def main():
 
     print(f"Roster: {len(students)} students from {len(files)} week files; "
           f"{built} feeds written/updated -> {out}/")
+
+    # Thin-feed tripwire: suspiciously small feeds are usually matching
+    # mistakes (phantom students are gone by construction now). Advisory
+    # only -- shout, don't fail.
+    for slug in sorted(event_counts):
+        if event_counts[slug] < THIN_THRESHOLD:
+            print(f"THIN:{slug}:{event_counts[slug]} events", file=sys.stderr)
 
 
 if __name__ == "__main__":

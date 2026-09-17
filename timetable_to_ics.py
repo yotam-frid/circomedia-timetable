@@ -1,35 +1,37 @@
 #!/usr/bin/env python3
 """Extract one student's lessons from a Circomedia weekly timetable and write an .ics file.
 
-Why a script (not an agent skill):
-  - deterministic, repeatable file transform: xlsx -> ics
-  - no judgement needed once group mapping + yellow=Year1 rules are encoded
-  - runnable in CI / cron for each new weekly file
+Deterministic, repeatable file transform: xlsx -> ics. See AGENTS.md for the
+architecture and matcher rules summary.
 
 Procedure:
   1. Read the week's group sheets -> who is in which group.
-     Args: student name (--name, default Yotam, case-insensitive) and
-     study year (--year, default 1). If the name is not found in that
-     year's groups sheet, fall forward to Year 2, then Year 3.
-     Sources: 'Year N Groups' sheets (Year 1 has Acro, Aerial,
-     Manipulation, Aerial Conditioning, Conditioning, Physical Theatre,
-     Context 1, Devising, Movement; Years 2/3 use the same generic
-     layout) plus 'Core Skills Groups' (Group 1/2/3, shared).
-  2. Read every day sheet (Mon-Fri). For each location column, split into
-     time blocks anchored by time-range headers (e.g. '8.45 - 10.00').
+     Year sheets have: row3 subjects, row4 days, row5 group descriptor,
+     rows 6+ members. Row5 is a true group label only when BOLD
+     ('Group 1', 'Major', ...). An unbolded row5 person-name ('Billie',
+     'James', 'Bee', ...) is the column's FIRST MEMBER (peer-group model:
+     groups are named after a member); staff-only names ('Nicky', 'Joe',
+     ...) and apparatus notes ('Maya - Hoop', 'Charlie straps', 'Lewis
+     (Nicky)') are session descriptors and grant no membership.
+     Apparatus/booking cells ('X - Hoop', duets, '?????' garble, week
+     notes) never mint students. Membership carries the column's weekday(s).
+  2. Read every day sheet (Mon-Fri). Each location column splits into time
+     blocks anchored by time-range headers (including dashless '2.15 3.30'
+     sub-headers); names embedded in header cells are recovered.
      A block belongs to the student if it:
-       - names them explicitly (pre-dash segment only: in 'Tan - Jonathan'
-         the teacher after the dash does not count; pure teacher lists like
-         'Lisa, Ethan, Chané' never count), OR
-       - says All Yr N / All Nth years matching their year, or generic All
-         years with a yellow header, OR
-       - names a group they belong to for that block's subject.
-     Year-1 yellow fill (FFFFFF00) marks Year-1 blocks; explicit name
-     matches count regardless of fill.
-  3. Write Apple/Google-Calendar-compatible .ics (RFC 5545 line folding). Event name is the class
-      ('Core Skills - Tumbling', plus ' (Group N)' suffix when
-      INCLUDE_GROUP_IN_TITLE and the event is group-specific). Location is the
-     room (Gym Bay 1, Classroom, South Wing...). Teacher/group go in DESCRIPTION.
+       - names them explicitly (pre-dash segment only; teacher-name segments
+         and pure teacher lists never count), OR
+       - targets their whole year (All Yr N / All Nth years / Year N / YR N
+         text, or the header's colour-year from the sheet legend:
+         yellow=Year 1, blue=Year 2, orange=Year 3), OR
+       - names a group they hold for that block's subject (subject-scoped;
+         PAR groups match PAR only, never plain 'Group N'), OR
+       - is an unmarked session in their year's colour on a weekday their
+         group meets that subject (covers 'Acro | Lisa and Ethan',
+         'Stand up | Angie', 'Clown | George', ...).
+     BTEC / Diploma / external-hire colours never match by year or group;
+     1-to-1s still match by explicit name regardless of colour.
+  3. Write Apple/Google-Calendar-compatible .ics (RFC 5545 line folding).
 
 Week dating: the first Monday of term is 14-09-2026 (Week 1). The week
 number is read from the input filename ('Week 1', 'Weeks 2', ...), so
@@ -53,6 +55,7 @@ except ImportError:
     sys.exit("Need openpyxl: pip install openpyxl")
 
 YEAR1_YELLOW = "FFFFFF00"
+YEAR3_ORANGE = "FF92D050"
 
 # When True, group-specific events carry the student's group in the title,
 # e.g. 'Acro (Group B)', 'Core Skills - Tumbling (Group 1)',
@@ -64,7 +67,10 @@ TERM_WEEK1_MONDAY = dt.date(2026, 9, 14)  # Week 1 Monday (dd-mm-yyyy 14-09-2026
 WEEK_RE = re.compile(r"weeks?\s*(\d+)", re.I)
 
 TIME_RANGE_RE = re.compile(r"(\d{1,2})\s*[.:]\s*(\d{2})\s*[-\u2013]\s*(\d{1,2})\s*[.:]\s*(\d{2})")
-GROUP_RE = re.compile(r"Group\s*([ABCD123abcd123])\b")
+# Dashless sub-headers: '2.15 3.30' buried inside a block (Thu Acro minors).
+DASHLESS_RANGE_RE = re.compile(r"(?<!\d)(\d{1,2})\.(\d{2})\s+(\d{1,2})\.(\d{2})(?!\d)")
+GROUP_RE = re.compile(r"(?<!par )group\s*([ABCD123abcd123])\b", re.I)
+PAR_GROUP_RE = re.compile(r"\bpar\s+group\s*([12])\b", re.I)
 # Private lessons are written '<student> - <teacher>' ('Tan - Jonathan',
 # 'Oakley & Joanna - Nicky'). Only the pre-dash segment can name a student;
 # split only on dashes with whitespace beside them so hyphenated surnames
@@ -75,12 +81,42 @@ DASH_SPLIT_RE = re.compile(r"\s+-\s*|\s*-\s+|[\u2013\u2014]")
 OWNER_RE = re.compile(r"^[^()]{1,25} \([A-Za-z]+\)$")
 # A pure list of 2+ person names ('Lisa, Ethan, Chané', 'Nicky and Janine').
 NAME_LIKE_RE = re.compile(r"^[A-Z\u00c0-\u00de][a-z\u00e0-\u00fe]+(?: [A-Z\u00c0-\u00de][a-z\u00e0-\u00fe]+)?$")
-TEACHER_LIST_SPLIT_RE = re.compile(r",|\band\b")
+TEACHER_LIST_SPLIT_RE = re.compile(r",|\band\b|&")
 # 'All Yr 1', 'All 1st years', 'All 2nd Year', 'All 3rd years' -> year number.
 ALL_YEAR_RE = re.compile(
     r"\ball\s*(?:(?:yr|year)s?\s*)?([123])(?:\s*(?:st|nd|rd|th))?(?:\s*years?)?\b", re.I)
 ALL_YEARS_GENERIC_RE = re.compile(r"\ball\s+years\b", re.I)
+# 'Year 2', 'Yr 2', 'YRs' markers (Teacher Training, Manipulation...).
+YEAR_MARK_RE = re.compile(r"\by(?:ea)?rs?\s*([123])\b", re.I)
 DAY_ORDER = ["monday", "tuesday", "wednesday", "thursday", "friday"]
+DAY_RE = re.compile(r"monday|tuesday|wednesday|thursday|friday", re.I)
+DAY_PLURAL_FIX = re.compile(r"fridays", re.I)
+
+# Staff names (lowercase). Students who also teach (James, Billie, ...) are
+# deliberately NOT here: they attend sessions named after them, and the
+# segment-position rules below keep their teaching mentions from matching.
+TEACHERS = {
+    "lisa", "ethan", "jane", "chané", "aimee", "aimee bennett",
+    "janine", "nicky", "joe", "joe palmer", "jonathan", "jono",
+    "mark", "mark parfitt-jones", "parfitt-jones",
+    "george", "george fuller", "fuller", "owen",
+    "rachel", "rachel kirby", "kirby", "angie", "tony",
+    "jamie", "sorcha", "lewis", "lewis trump", "trump",
+    "rosy", "coralee", "maia", "heather", "heather parkin", "parkin",
+    "moira", "moira hunt", "hunt", "denis", "charlie white",
+    "tilly", "emily", "emily orme", "orme",
+}
+# Multi-word staff names: a student-name match inside one never counts
+# ('Charlie White' must not match student Charlie).
+TEACHER_FULLNAMES = {t for t in TEACHERS if " " in t or "-" in t}
+
+# Subjects with no group structure: the whole year attends.
+WHOLE_COHORT = {"teacher_training"}
+
+# Apparatus / booking vocabulary: cells carrying these are session notes,
+# never students and never group labels.
+APPARATUS_RE = re.compile(
+    r"\bhoop|rod\b|straps|rope\b|trapeze|silks?|dance trap\b", re.I)
 
 
 def make_uid(date, start, end, subject_key):
@@ -111,11 +147,32 @@ def fold_ics_line(line):
                                          for p in parts[1:]]
 
 
+def fill_key(cell):
+    """Hashable fill identity: ('rgb', RRGGBB), ('theme', idx, tint) or
+    ('none',). Year 2 headers use theme tints, so raw-RGB comparison alone
+    misreads them as unfilled."""
+    f = cell.fill
+    if not getattr(f, "patternType", None):
+        return ("none",)
+    fg = f.fgColor
+    t = getattr(fg, "type", None)
+    if t == "rgb":
+        rgb = str(getattr(fg, "rgb", "") or "")
+        if rgb and rgb != "00000000":
+            return ("rgb", rgb)
+        return ("none",)
+    if t == "theme":
+        return ("theme", getattr(fg, "theme", None), getattr(fg, "tint", None))
+    return ("none",)
+
+
 def fill_rgb(cell):
+    """Legacy helper: explicit RGB string or '00000000'."""
     try:
         for attr in ("fgColor", "bgColor"):
             c = getattr(cell.fill, attr, None)
-            if c is not None and getattr(c, "rgb", None) not in (None, "00000000"):
+            if c is not None and getattr(c, "type", None) == "rgb" \
+                    and getattr(c, "rgb", None) not in (None, "00000000"):
                 return str(c.rgb)
     except Exception:
         pass
@@ -128,9 +185,25 @@ def val(ws, r, c, merged_map):
     return ws.cell(row=vr, column=vc).value
 
 
+def val_cell(ws, r, c, merged_map):
+    """Cell object resolving merged cells (for fill/font reads)."""
+    vr, vc = merged_map.get((r, c), (r, c))
+    return ws.cell(row=vr, column=vc)
+
+
 def cell_rgb(ws, r, c, merged_map):
     vr, vc = merged_map.get((r, c), (r, c))
     return fill_rgb(ws.cell(row=vr, column=vc))
+
+
+def cell_year(ws, r, c, merged_map, legend):
+    """Header colour-year from the sheet legend: 1/2/3, 'other' (BTEC /
+    Diploma / external-hire colours) or None (unfilled/neutral)."""
+    vr, vc = merged_map.get((r, c), (r, c))
+    key = fill_key(ws.cell(row=vr, column=vc))
+    if key[0] == "none":
+        return None
+    return legend.get(key, "other")
 
 
 def merged_map_of(ws):
@@ -143,14 +216,58 @@ def merged_map_of(ws):
     return m
 
 
+def parse_legend(wb):
+    """Colour-year map from the Monday sheet's Key area ('Year 1/2/3'
+    swatches). Falls back to explicit RGB for Years 1+3 and any theme
+    fill for Year 2 (all observed theme header fills are Year 2 blue)."""
+    legend = {}
+    monday = next((s for s in wb.sheetnames
+                   if s.strip().lower().startswith("monday")), None)
+    if monday is not None:
+        ws = wb[monday]
+        mm = merged_map_of(ws)
+        # Key area lives top-right (cols 10+, first rows); exact matches
+        # only ('Year 1 BTEC' day texts must not match).
+        for r in range(1, 16):
+            for c in range(10, ws.max_column + 1):
+                v = ws.cell(row=r, column=c).value
+                if v and str(v).strip().lower() in ("year 1", "year 2", "year 3"):
+                    n = int(str(v).strip()[-1])
+                    legend[fill_key(val_cell(ws, r, c, mm))] = n
+    legend.setdefault(("rgb", YEAR1_YELLOW), 1)
+    legend.setdefault(("rgb", YEAR3_ORANGE), 3)
+    return legend
+
+
 def norm_subject_key(s):
     s = (s or "").lower()
     if "aerial conditioning" in s:
         return "aerial_conditioning"
-    if "physical theatre" in s or "physical theater" in s:
+    if "teacher training" in s:
+        return "teacher_training"
+    # PAR groups before physical theatre: the Tuesday PAR slot carries a
+    # 'PT Minors' helper line ('research & materials | On teams') that is
+    # annotation, not session identity -- the slot belongs to PAR Group 2.
+    if "par group 1" in s:
+        return "par_group_1"
+    if "par group 2" in s:
+        return "par_group_2"
+    if "physical theatre" in s or "physical theater" in s \
+            or re.search(r"\bpt\b", s):
         return "physical_theatre"
+    if "pro tour" in s:
+        return "context3"
+    if re.search(r"\bpar\b", s):
+        return "par"
     if "core skill" in s:
         return "core_skills"
+    if "stand up" in s or "standup" in s:
+        return "stand_up"
+    if "clown" in s:
+        return "clown"
+    m = re.search(r"context\s*([123])", s)
+    if m:
+        return f"context{m.group(1)}"
     if "context" in s:
         return "context1"
     if "conditioning" in s:
@@ -193,18 +310,66 @@ def display_name(lower_name):
     )
 
 
+DISPLAY_OVERRIDES = {
+    "jj angel": "JJ Angel",
+}
+
+# Canonical identity merges (nickname/shorthand/apparatus variants).
+# Applied inside roster_norm so every consumer merges identically.
+MERGE_MAP = {
+    "pip": "pipper",
+    "fin": "finley",
+    "meg": "megan",
+    "maddie": "madeline",
+    "jj": "jjangel",
+    "charlierope": "charlie",
+    "charliestraps": "charlie",
+}
+
+
+def parse_year_maps(wb):
+    """{1: people, 2: people, 3: people} without Core Skills merge.
+
+    Year 3 is parsed with the full cross-sheet verify set (Core + Year 1/2
+    rows + Year 3 membership rows) so row5 peer-names (Billie, Pipper,
+    ...) resolve as first members rather than vanishing.
+    """
+    core = parse_core_skills(wb)
+    verify = set(core)
+    prelim = {}
+    for n in (1, 2):
+        people, rownames = parse_year_sheet(wb, n)
+        prelim[n] = people
+        verify |= {roster_norm(x) or x.lower() for x in rownames}
+    _, r3 = parse_year_sheet(wb, 3)
+    verify |= {roster_norm(x) or x.lower() for x in r3}
+    prelim[3], _ = parse_year_sheet(wb, 3, verify=verify)
+    return prelim, core
+
+
+def _merged_away(key):
+    """True if roster_norm maps this key onto a different canonical name
+    ('pip' -> 'pipper'): the merged-away variant must never win display."""
+    k = key.strip()
+    if k.startswith("(") and k.endswith(")"):
+        k = k[1:-1]
+    k = re.sub(r"\(.*?\)", "", k)
+    return re.sub(r"[^a-z0-9]", "", k.lower()) in MERGE_MAP
+
+
 def parse_roster(wb):
-    """Canonical roster from raw year sheets (no Core Skills merge).
+    """Canonical roster from raw year sheets (no Core Skills merge for year).
 
     Returns {key: {"name": display, "year": n, "keys": [variant keys]}}.
-    Spelling variants ('farrah' vs 'farrah (minor)', '(james)' vs 'james')
-    merge into one entry; schedule annotations ('friday wk5') are dropped.
-    Core-skills-only names (spelling variants) fall back to year 1;
-    lookup_merged resolves them at build time anyway.
+    Spelling variants ('farrah' vs 'farrah (minor)') and nicknames ('pip'
+    vs 'pipper') merge into one entry; apparatus bookings ('x - hoop') and
+    teacher annotations never mint entries. Year comes from year-sheet
+    membership only (Core-Skills-only names fall back to year 1).
     """
+    prelim, core = parse_year_maps(wb)
     by_norm = {}
     for n in (1, 2, 3):
-        for key in parse_year_sheet(wb, n):
+        for key in prelim[n]:
             if JUNK_ROSTER_RE.search(key):
                 continue
             norm = roster_norm(key) or key.lower()
@@ -212,7 +377,6 @@ def parse_roster(wb):
             if key not in e["keys"]:
                 e["keys"].append(key)
             e["year"] = min(e["year"], n)
-    core = parse_core_skills(wb)
     for key in core:
         if JUNK_ROSTER_RE.search(key):
             continue
@@ -222,12 +386,16 @@ def parse_roster(wb):
             e["keys"].append(key)
     out = {}
     for norm, e in by_norm.items():
-        # Prefer the cleanest key for identity ('farrah' over
-        # 'farrah (minor)'; 'dee dee' over 'deedee').
-        pref = sorted(e["keys"], key=lambda k: ("(" in k, " " not in k, len(k)))[0]
+        # Prefer the cleanest key for identity: merged-away nicknames
+        # ('pip') never win; then ('farrah' over 'farrah (minor)';
+        # 'dee dee' over 'deedee').
+        pref = sorted(e["keys"], key=lambda k: (_merged_away(k), "(" in k,
+                                                 " " not in k, len(k)))[0]
         clean = re.sub(r"\(.*?\)", "", pref).strip() or pref
-        out[pref] = {"name": display_name(clean.lower()),
-                     "year": e["year"], "keys": sorted(e["keys"])}
+        disp = DISPLAY_OVERRIDES.get(clean.lower(),
+                                     display_name(clean.lower()))
+        out[pref] = {"name": disp, "year": e["year"],
+                     "keys": sorted(e["keys"])}
     return out
 
 
@@ -239,7 +407,14 @@ def parse_core_skills(wb):
             continue
         ws = wb[sheet]
         mm = merged_map_of(ws)
-        col_group = {4: "Group 1", 6: "Group 2", 8: "Group 3"}
+        col_group = {}
+        for c in range(1, ws.max_column + 1):
+            v = val(ws, 4, c, mm)
+            if v and re.search(r"group\s*([123])", str(v), re.I):
+                col_group[c] = "Group " + re.search(
+                    r"group\s*([123])", str(v), re.I).group(1)
+        if not col_group:
+            col_group = {4: "Group 1", 6: "Group 2", 8: "Group 3"}
         for r in range(5, ws.max_row + 1):
             for c, g in col_group.items():
                 v = val(ws, r, c, mm)
@@ -248,61 +423,205 @@ def parse_core_skills(wb):
     return out
 
 
-def parse_year_sheet(wb, n):
-    """Generic parser for 'Year N Groups': row3 subjects, row5 group labels.
+def _cell_is_junk(name):
+    if not name or not name.strip():
+        return True
+    n = name.strip()
+    if n.isdigit():
+        return True
+    if len(n) > 25 or "need" in n.lower():
+        return True
+    if JUNK_ROSTER_RE.search(n):
+        return True
+    if n.startswith("(") and n.endswith(")"):
+        return True  # '(James)' style annotations, not members
+    if "?" in n:
+        return True  # 'Lewis ?????' uncertainty garble
+    return False
 
-    Returns {name_lower: {subject_key_or_raw: label}}. Subject keys use
-    norm_subject_key when recognisable, else the raw header text. Group
-    labels are kept raw ('Group 2', 'Group D', 'Major', 'Minors',
-    'Billie', ...) plus normalised for Group X.
+
+def _row5_kind(label):
+    """Classify a row5 group descriptor: 'label' (true Group X-style label),
+    'apparatus' (booking descriptor, grants nothing), 'teacher' (staff-only
+    name, grants nothing) or 'peer' (verified-student name: label AND first
+    member -- decided by the caller against the verify set)."""
+    lab = (label or "").strip()
+    if not lab:
+        return "empty"
+    if APPARATUS_RE.search(lab) or "&" in lab:
+        return "apparatus"
+    if re.search(r"\(.*?\)", lab):
+        return "apparatus"  # 'Lewis (Nicky)', 'Billie (minor) ...'
+    if lab.lower() in TEACHERS:
+        return "teacher"
+    if GROUP_RE.search(lab) or re.search(
+            r"\bmajor\b|\bminor\b", lab, re.I):
+        return "label"
+    if re.search(r"^[A-Za-z][A-Za-z .'-]*$", lab):
+        return "peer"
+    return "label"
+
+
+def _column_days(day_text):
+    """Weekday indices from a row4 day cell ('Tuesday and Thursday',
+    'Thursday (minors)', 'Fridays')."""
+    days = set()
+    if day_text:
+        t = DAY_PLURAL_FIX.sub("friday", str(day_text).lower())
+        for i, d in enumerate(DAY_ORDER):
+            if d in t:
+                days.add(i)
+    return days
+
+
+def parse_year_sheet(wb, n, verify=frozenset()):
+    """Generic parser for 'Year N Groups': row3 subjects, row4 days,
+    row5 group descriptor, rows 6+ members.
+
+    Returns (people, rownames): people {name_lower: {subject_key:
+    {"labels": [...], "days": [...], "detail": {label: [days]}}}};
+    rownames = rows-6+ human names from membership columns (for the
+    cross-sheet verify set: row5 peer-names count as members only if the
+    person is verifiably a student elsewhere).
     """
     sheet = _year_sheet_name(wb, n)
     if not sheet:
-        return {}
+        return {}, set()
     ws = wb[sheet]
     mm = merged_map_of(ws)
-    subj_by_col, last = {}, None
+    subj_by_col, day_by_col, last = {}, {}, None
     for c in range(1, ws.max_column + 1):
         v = val(ws, 3, c, mm)
         if v and str(v).strip():
             last = str(v).strip()
         subj_by_col[c] = last
-    group_by_col = {c: val(ws, 5, c, mm) for c in range(1, ws.max_column + 1)}
-    people = {}
+        day_by_col[c] = val(ws, 4, c, mm)
+    # Column classification first (no verify needed except peer row5s).
+    col_kind, col_label = {}, {}
+    for c in range(1, ws.max_column + 1):
+        lab = val(ws, 5, c, mm)
+        if lab and str(lab).strip():
+            if val_cell(ws, 5, c, mm).font.bold:
+                col_kind[c] = "label"
+            else:
+                col_kind[c] = _row5_kind(str(lab).strip())
+            col_label[c] = str(lab).strip()
+        else:
+            col_kind[c] = "empty"
+    membership_cols = {c for c, k in col_kind.items()
+                       if k in ("label", "peer")}
+    # Rows-6+ human names from membership columns (verify set contribution).
+    rownames = set()
     for r in range(6, ws.max_row + 1):
-        for c in range(1, ws.max_column + 1):
+        for c in membership_cols:
             v = val(ws, r, c, mm)
-            g = group_by_col.get(c)
-            s = subj_by_col.get(c)
-            if not v or not g or not s:
+            if not v or not str(v).strip():
                 continue
             name = str(v).strip()
-            glab = str(g).strip()
-            if not name or name.isdigit() or not glab or glab.isdigit():
+            if _cell_is_junk(name) or APPARATUS_RE.search(name) \
+                    or "&" in name:
                 continue
-            if len(name) > 25 or "need" in name.lower():
+            base = re.sub(r"\(.*?\)", "", name).strip() or name
+            rownames.add(base.lower())
+    verify_all = set(verify) | {roster_norm(x) or x.lower() for x in rownames}
+    people = {}
+
+    def add(name_lower, key, label, days):
+        if _cell_is_junk(name_lower):
+            return
+        d = people.setdefault(name_lower, {}).setdefault(
+            key, {"labels": [], "days": [], "detail": {}})
+        if label not in d["labels"]:
+            d["labels"].append(label)
+        for wd in days:
+            if wd not in d["days"]:
+                d["days"].append(wd)
+        det = d["detail"].setdefault(label, [])
+        for wd in days:
+            if wd not in det:
+                det.append(wd)
+
+    for c in range(1, ws.max_column + 1):
+        kind = col_kind.get(c, "empty")
+        if kind not in ("label", "peer"):
+            continue  # apparatus/teacher/empty columns grant nothing
+        s = subj_by_col.get(c)
+        if not s:
+            continue
+        key = norm_subject_key(s) or s.strip().lower()
+        if n == 1 and key in ("context1", "devising", "movement") \
+                and not GROUP_RE.search(col_label.get(c) or ""):
+            continue  # Abigail tutor columns carry no membership (Year 1);
+            # only proper Group X columns do
+        days = _column_days(day_by_col.get(c)) or set(range(5))
+        labels = []
+        if kind == "label":
+            lab = col_label[c]
+            gm = GROUP_RE.search(lab)
+            labels.append(f"Group {gm.group(1).upper()}" if gm else lab)
+        else:  # peer: label AND first member if verifiably a student
+            lab = col_label[c]
+            labels.append(lab)
+        for r in range(6, ws.max_row + 1):
+            v = val(ws, r, c, mm)
+            if not v or not str(v).strip():
                 continue
-            if name.lower() == "abigail" and n == 1 and norm_subject_key(s) in ("context1", "devising", "movement"):
+            name = str(v).strip()
+            if _cell_is_junk(name) or APPARATUS_RE.search(name) \
+                    or "&" in name:
+                continue
+            base = re.sub(r"\(.*?\)", "", name).strip() or name
+            if n == 1 and base.lower() == "abigail" and key in (
+                    "context1", "devising", "movement"):
                 continue  # tutor-group label, not a student (Year 1)
-            key = norm_subject_key(s) or s.strip().lower()
-            if n == 1 and key in ("context1", "devising", "movement") and not GROUP_RE.search(glab):
-                continue  # tutor-group label (e.g. 'Abigail'), not a student group
-            gm = GROUP_RE.search(glab)
-            glabel = f"Group {gm.group(1).upper()}" if gm else glab
-            people.setdefault(name.lower(), {})[key] = glabel
-    return people
+            for lab in labels:
+                add(base.lower(), key, lab, days)
+        if kind == "peer":
+            lab = col_label[c]
+            if (roster_norm(lab) or lab.lower()) in verify_all:
+                add(lab.lower(), key, lab, days)
+    return people, rownames
 
 
 def parse_groups(wb, start_year=1):
     """Return ({1: map, 2: map, 3: map}) with Core Skills merged into each."""
-    core = parse_core_skills(wb)
+    prelim, core = parse_year_maps(wb)
     maps = {}
     for n in (1, 2, 3):
-        m = parse_year_sheet(wb, n)
+        people = prelim[n]
         for k, v in core.items():
-            m.setdefault(k, {}).setdefault("core_skills", v["core_skills"])
-        maps[n] = m
+            g = v["core_skills"]
+            d = people.setdefault(k, {}).setdefault(
+                "core_skills",
+                {"labels": [], "days": [], "detail": {}})
+            if g not in d["labels"]:
+                d["labels"].append(g)
+            for wd in range(5):
+                if wd not in d["days"]:
+                    d["days"].append(wd)
+            det = d["detail"].setdefault(g, [])
+            for wd in range(5):
+                if wd not in det:
+                    det.append(wd)
+        maps[n] = people
     return maps
+
+
+def _merge_detail(dst, src):
+    for subj, entry in src.items():
+        d = dst.setdefault(subj, {"labels": [], "days": [], "detail": {}})
+        for lab in entry.get("labels", []):
+            if lab not in d["labels"]:
+                d["labels"].append(lab)
+        for wd in entry.get("days", []):
+            if wd not in d["days"]:
+                d["days"].append(wd)
+        for lab, wds in entry.get("detail", {}).items():
+            det = d.setdefault("detail", {}).setdefault(lab, [])
+            for wd in wds:
+                if wd not in det:
+                    det.append(wd)
+    return dst
 
 
 def lookup_student(maps, name, start_year=1):
@@ -326,8 +645,7 @@ def lookup_merged(maps, keys, start_year=1):
     for n in range(start_year, 4):
         me = {}
         for k in keys:
-            for subj, grp in maps.get(n, {}).get(k.lower(), {}).items():
-                me.setdefault(subj, grp)
+            _merge_detail(me, maps.get(n, {}).get(k.lower(), {}))
         if me:
             return me, n
     return {}, None
@@ -339,20 +657,28 @@ JUNK_ROSTER_RE = re.compile(
 
 
 def roster_norm(key):
-    """Identity for entity resolution: 'Farrah (minor)' -> 'farrah'."""
+    """Identity for entity resolution: 'Farrah (minor)' -> 'farrah',
+    with nickname/apparatus merges ('Pip' -> 'pipper')."""
     k = key.strip()
     if k.startswith("(") and k.endswith(")"):
         k = k[1:-1]
     k = re.sub(r"\(.*?\)", "", k)
-    return re.sub(r"[^a-z0-9]", "", k.lower())
+    norm = re.sub(r"[^a-z0-9]", "", k.lower())
+    return MERGE_MAP.get(norm, norm)
 
 
-def detect_blocks(ws):
+def detect_blocks(ws, legend=None):
     """Split each location column into time blocks.
 
     Returns (locations, blocks): locations {col: name}, blocks list of
-    dict(col, location, start_row, end_row, time_text).
+    dict(col, location, start_row, end_row, time_text, header_year,
+    header_names). header_year comes from the sheet legend (1/2/3,
+    'other', or None when unfilled). header_names are person texts
+    recovered from inside time-header cells ('Kitty - Jonathan' hidden
+    in a '12.45 - 1.30' header cell); dashless '2.15 3.30' headers split
+    sub-blocks (Thu Acro minors).
     """
+    legend = legend or {}
     mm = merged_map_of(ws)
     locations = {}
     for c in range(2, ws.max_column + 1):
@@ -360,13 +686,35 @@ def detect_blocks(ws):
         if v and str(v).strip() and "first aider" not in str(v).lower() and str(v).strip().lower() != "key":
             locations[c] = " ".join(str(v).split())
     # find time-range headers per column (yellow or any, but record fill)
-    headers = []  # (col, row, text, is_yellow)
+    headers = []  # (col, row, text, year, names)
     for c in locations:
         for r in range(4, min(ws.max_row + 1, 45)):
             v = val(ws, r, c, mm)
-            if v and TIME_RANGE_RE.search(str(v)):
-                rgb = cell_rgb(ws, r, c, mm)
-                headers.append((c, r, " ".join(str(v).split()), rgb == YEAR1_YELLOW))
+            if not v or not str(v).strip():
+                continue
+            t = " ".join(str(v).split())
+            m = TIME_RANGE_RE.search(t)
+            dm = None if m else DASHLESS_RANGE_RE.search(t)
+            if not (m or dm):
+                continue
+            if dm and m:
+                dm = None
+            if dm:
+                sh, sm, eh, em = (int(dm.group(1)), int(dm.group(2)),
+                                  int(dm.group(3)), int(dm.group(4)))
+                t = f"{sh}.{sm:02d} - {eh}.{em:02d}"
+            year = cell_year(ws, r, c, mm, legend)
+            # Recover person texts hidden inside the header cell: split on
+            # any time range they contain ('Joanna- Aimee 12.45 - 1.30
+            # Kitty - Jonathan').
+            parts = [p for p in re.split(
+                r"(\d{1,2}\s*[.:]\s*\d{2}\s*[-\u2013]\s*\d{1,2}\s*[.:]\s*\d{2}|\d{1,2}\.\d{2}\s+\d{1,2}\.\d{2})", t)
+                if p and not re.fullmatch(
+                    r"\s*(\d{1,2}\s*[.:]\s*\d{2}\s*[-\u2013]\s*\d{1,2}\s*[.:]\s*\d{2}|\d{1,2}\.\d{2}\s+\d{1,2}\.\d{2})\s*",
+                    p)]
+            names = [" ".join(p.split()) for p in parts
+                     if p.strip() and re.search(r"[A-Za-z]", p)]
+            headers.append((c, r, t, year, names))
     headers.sort()
     # Repair spreadsheet typos where a time header was copy-pasted: if a
     # header duplicates an earlier header in the SAME column (same time text)
@@ -379,11 +727,11 @@ def detect_blocks(ws):
     # Count how many times each parsed time occurs per column, so we can
     # spot a header that duplicates an earlier block in the same column.
     col_time_counts = {}
-    for (c, r, t, y) in headers:
+    for (c, r, t, y, _) in headers:
         p = block_times(t)
         col_time_counts[(c, p)] = col_time_counts.get((c, p), 0) + 1
     row_times = {}
-    for idx, (c, r, t, y) in enumerate(headers):
+    for idx, (c, r, t, y, _) in enumerate(headers):
         row_times.setdefault(r, []).append(idx)
     for r, idxs in row_times.items():
         if len(idxs) < 2:
@@ -398,7 +746,7 @@ def detect_blocks(ws):
         if counts[majority] < 2:
             continue
         for i, p in parsed:
-            c, rr, t, y = headers[i]
+            c, rr, t, y, nm = headers[i]
             # only override genuine duplicates of an earlier same-col header
             if p != majority and col_time_counts.get((c, p), 0) > 1:
                 fixed = next(headers[j][2] for j, q in parsed if q == majority)
@@ -406,12 +754,12 @@ def detect_blocks(ws):
                       f"{t!r} duplicates earlier block; using row consensus "
                       f"{fixed!r}",
                       file=sys.stderr)
-                headers[i] = (c, rr, fixed, y)
+                headers[i] = (c, rr, fixed, y, nm)
     blocks = []
-    for i, (c, r, t, y) in enumerate(headers):
+    for i, (c, r, t, y, nm) in enumerate(headers):
         # end = next header in same column, else next 'Student Training Ends' / 'Closed' / sheet end
         end = ws.max_row + 1
-        for (c2, r2, _, _) in headers:
+        for (c2, r2, _, _, _) in headers:
             if c2 == c and r2 > r:
                 end = r2
                 break
@@ -422,16 +770,18 @@ def detect_blocks(ws):
                     end = rr
                     break
         blocks.append({"col": c, "location": locations[c], "start_row": r,
-                       "end_row": end, "time_text": t, "header_yellow": y})
+                       "end_row": end, "time_text": t, "header_year": y,
+                       "header_names": nm})
     return locations, blocks
 
 
 def block_texts(ws, block):
     mm = merged_map_of(ws)
-    texts = []
+    texts = list(block.get("header_names", []))
     for r in range(block["start_row"], min(block["end_row"], 42)):
         v = val(ws, r, block["col"], mm)
-        if v and str(v).strip() and not TIME_RANGE_RE.search(str(v)):
+        if v and str(v).strip() and not TIME_RANGE_RE.search(str(v)) \
+                and not DASHLESS_RANGE_RE.search(str(v)):
             t = " ".join(str(v).split())
             if t not in texts:
                 texts.append(t)
@@ -439,13 +789,7 @@ def block_texts(ws, block):
 
 
 def block_subject_key(texts):
-    joined = " | ".join(texts).lower()
-    for key in ("aerial conditioning", "physical theatre", "core skills", "context",
-                "conditioning", "acro", "aerial", "manipulation",
-                "creative project", "devising", "movement", "dance"):
-        if key in joined:
-            return norm_subject_key(key)
-    return None
+    return norm_subject_key(" | ".join(texts))
 
 
 def pre_dash(text):
@@ -454,9 +798,11 @@ def pre_dash(text):
 
 
 def is_teacher_list(text):
-    """True for pure multi-name lists ('Lisa, Ethan, Chané')."""
+    """True for pure staff lists ('Lisa, Ethan, Chané', 'Tony and Janine'):
+    2+ name-like parts that are ALL known teachers. Student lists
+    ('Holly, Paul', 'Maya, Dee Dee, Rose') fail on the first name."""
     parts = [p.strip() for p in TEACHER_LIST_SPLIT_RE.split(text) if p.strip()]
-    return len(parts) >= 2 and all(NAME_LIKE_RE.match(p) for p in parts)
+    return len(parts) >= 2 and all(p.lower() in TEACHERS for p in parts)
 
 
 def all_years_year(texts):
@@ -469,6 +815,16 @@ def all_years_year(texts):
         if ALL_YEARS_GENERIC_RE.search(t):
             return "all"
     return None
+
+
+def year_marks(texts):
+    """Year numbers from 'Year N / YR N' markers ('Teacher Training | YR 2',
+    'Manipulation | Year 2')."""
+    out = set()
+    for t in texts:
+        for m in YEAR_MARK_RE.finditer(t):
+            out.add(int(m.group(1)))
+    return out
 
 
 def event_name(texts):
@@ -484,8 +840,26 @@ def event_name(texts):
             sub = "Handstands"
         elif "professional" in jl or "member" in jl:
             sub = "Professional Members"
+    elif "teacher training" in jl:
+        base = "Teacher Training"
+    elif "context" in jl and "lecture" in jl:
+        m = re.search(r"context\s*([123])", jl)
+        base = f"Context {m.group(1)} - Lecture" if m else "Context 1 - Lecture"
     elif "context" in jl:
-        base = "Context 1 - Lecture" if "lecture" in jl else "Context 1"
+        m = re.search(r"context\s*([123])", jl)
+        base = f"Context {m.group(1)}" if m else "Context 1"
+    elif "pro tour" in jl:
+        base = "Pro Tour"
+    elif "par group 1" in jl:
+        base = "PAR Group 1"
+    elif "par group 2" in jl:
+        base = "PAR Group 2"
+    elif re.search(r"\bpar\b", jl):
+        base = "PAR"
+    elif "stand up" in jl or "standup" in jl:
+        base = "Stand Up"
+    elif "clown" in jl:
+        base = "Clown"
     elif "aerial conditioning" in jl:
         base = "Aerial Conditioning"
     elif "conditioning" in jl:
@@ -511,7 +885,10 @@ def event_name(texts):
         for t in texts:
             tl = t.lower()
             if ("group" in tl or "yr 1" in tl or "1st year" in tl or "all year" in tl
-                    or "heather" in tl or "mark parfitt" in tl or TIME_RANGE_RE.search(t)):
+                    or "heather" in tl or "mark parfitt" in tl or TIME_RANGE_RE.search(t)
+                    or "student training ends" in tl or tl == "closed"
+                    or "warm up" in tl or "self led" in tl or "btec" in tl
+                    or "professional" in tl or "private hire" in tl):
                 continue
             base = t
             break
@@ -521,26 +898,16 @@ def event_name(texts):
     return base
 
 
-def display_event_name(texts, subject_key, groups, groups_in_block):
-    """Class name, with ' (Group X)' suffix when the event is group-specific.
-
-    Controlled by INCLUDE_GROUP_IN_TITLE. Uses the student's own group label
-    for the block's subject (e.g. 'Group B'); non-group events (All-years,
-    named 1-to-1s with no group in the block) keep the bare name.
-    """
+def display_event_name(texts, subject_key, matched_label):
+    """Class name, with ' (Group X)' suffix when the event is group-specific
+    (matched_label is the student's own label that fired, or a label found
+    in the block text). Non-group events keep the bare name."""
     base = event_name(texts)
-    if not INCLUDE_GROUP_IN_TITLE or not subject_key:
+    if not INCLUDE_GROUP_IN_TITLE or not subject_key or not matched_label:
         return base
-    mine = (groups or {}).get(subject_key, "")
-    if not mine:
+    if matched_label.lower() in base.lower():
         return base
-    joined = " | ".join(texts).lower()
-    group_specific = bool(groups_in_block) or (mine.lower() in joined)
-    if not group_specific:
-        return base
-    if mine.lower() in base.lower():
-        return base
-    return f"{base} ({mine})"
+    return f"{base} ({matched_label})"
 
 
 def teachers_of(texts):
@@ -597,6 +964,16 @@ def monday_from_filename(path):
     return TERM_WEEK1_MONDAY + dt.timedelta(weeks=int(m.group(1)) - 1)
 
 
+def _explicit_hit(seg, candidates):
+    """Seg names the student, ignoring staff full names inside it
+    ('Charlie White' never matches student Charlie)."""
+    low = seg.lower()
+    for t in TEACHER_FULLNAMES:
+        if t in low:
+            low = low.replace(t, " ")
+    return any(re.search(rf"\b{re.escape(c)}\b", low) for c in candidates)
+
+
 def extract_for_student(wb, name, monday=None, cal_year=2026, cal_month=9,
                         start_year=1, filename=None, groups=None,
                         matched_year=None, aliases=()):
@@ -604,6 +981,7 @@ def extract_for_student(wb, name, monday=None, cal_year=2026, cal_month=9,
         maps = parse_groups(wb)
         groups, matched_year = lookup_student(maps, name, start_year)
     me = groups
+    legend = parse_legend(wb)
     # Name candidates for explicit matches: variants plus their
     # paren-stripped bases ('lewis (nicky)' -> 'lewis').
     candidates = {name.lower()}
@@ -630,68 +1008,145 @@ def extract_for_student(wb, name, monday=None, cal_year=2026, cal_month=9,
             date = dt.date(cal_year, cal_month, int(dm.group(1)))
         else:
             date = dt.date(cal_year, cal_month, 1) + dt.timedelta(days=weekday)
-        _, blocks = detect_blocks(ws)
+        _, blocks = detect_blocks(ws, legend)
         for b in blocks:
             texts = block_texts(ws, b)
             if not texts:
                 continue
+            joined = " | ".join(texts)
+            jl = joined.lower()
             skey = block_subject_key(texts)
-            # need some Year-1 signal: yellow header, All-years, group, or explicit name
             groups_in_block = set()
-            for t in texts:
-                for gm in GROUP_RE.finditer(t):
-                    groups_in_block.add(f"Group {gm.group(1).upper()}")
+            for gm in GROUP_RE.finditer(joined):
+                groups_in_block.add(f"Group {gm.group(1).upper()}")
+            par_in_block = {f"PAR {m.group(1)}"
+                            for m in PAR_GROUP_RE.finditer(joined)}
             taught_class = bool(groups_in_block) and bool(skey)
             owners = [t for t in texts if OWNER_RE.match(t)]
             named = False
             for t in (owners or texts):
+                if "///" in t or "student training ends" in t.lower() \
+                        or t.strip().lower() == "closed":
+                    continue
                 seg = pre_dash(t)
-                if taught_class and is_teacher_list(seg):
+                if not OWNER_RE.match(t):
+                    # Parenthesised credits are not bookings: 'Ethan (& Lisa)'
+                    # is Ethan teaching (Lisa assisting), never a student
+                    # naming Lisa. Owner-pattern 1-to-1s ('Charlie
+                    # (Creative)') keep their full text.
+                    seg = re.sub(r"\(.*?\)", "", seg).strip()
+                seg = re.sub(r"\btbc\b", "", seg, flags=re.I).strip()
+                if not seg:
+                    continue
+                if seg.lower() in TEACHERS:
+                    continue  # staff mention, never a student match
+                if skey and is_teacher_list(seg):
                     continue  # 'Lisa, Ethan, Chané': teachers, not students
-                if any(re.search(rf"\b{re.escape(c)}\b", seg, re.I)
-                       for c in candidates):
+                if _explicit_hit(seg, candidates):
                     named = True
                     break
             student_year = matched_year or start_year
             disregards_year = all_years_year(texts)
+            ymarks = year_marks(texts)
+            hdr = b.get("header_year")
+            if hdr == "other" and not named:
+                continue  # BTEC / Diploma / external-hire colours
+            if ("warm up" in jl or "self led" in jl) and not named:
+                continue  # optional drop-ins
             allyear = (disregards_year == student_year
-                       or (disregards_year == "all" and b["header_yellow"]))
-            if not (b["header_yellow"] or allyear or groups_in_block or named):
-                continue
+                       or (disregards_year == "all" and hdr == 1
+                           and student_year == 1))
+            if allyear and hdr not in (student_year, None):
+                allyear = False
             attend = False
             reason = ""
+            matched_label = ""
+            subj = me.get(skey, {}) if skey else {}
+            my_labels = subj.get("labels", []) if subj else []
+            my_days = subj.get("days", []) if subj else []
             if named:
                 attend, reason = True, "named explicitly"
+                matched_label = _best_label(my_labels, joined)
             elif allyear:
                 attend, reason = True, f"all year {disregards_year}"
-            elif groups_in_block:
-                mine = me.get(skey, "") if skey else ""
-                if skey and mine and mine in groups_in_block:
-                    attend, reason = True, f"{skey} {mine}"
-                # else: strict reject for Group X mismatches (do NOT fall back
-                # to "any group matches", or Core Skills Group 1 would wrongly
-                # match an Acro Group 1 block).
-                elif skey and mine and not GROUP_RE.search(mine):
-                    # Non-'Group X' labels (Year 2/3: 'Major', 'Minors',
-                    # teacher-name groups like 'Billie'): match if the label
-                    # appears in the block text, e.g. 'Major' in 'Acro Majors'.
-                    if mine.lower() in " | ".join(texts).lower():
-                        attend, reason = True, f"{skey} {mine}"
+            elif ymarks and student_year in ymarks \
+                    and hdr in (student_year, None):
+                if my_labels:
+                    attend, reason = True, f"year {student_year} group"
+                    matched_label = _best_label(my_labels, joined)
+                elif skey in WHOLE_COHORT:
+                    attend, reason = True, f"year {student_year} cohort"
+            elif par_in_block and skey in ("par_group_1", "par_group_2"):
+                # PAR columns hold a single group each, so subject
+                # membership is the match ('PAR GROUP 2' must never match
+                # a plain 'Group 2'). Base title already names the group.
+                num = skey[-1]
+                if f"PAR {num}" in par_in_block and my_labels:
+                    attend, reason = True, f"{skey} session"
+            elif skey and (groups_in_block or par_in_block):
+                # Marked session: strict subject-scoped label match. This is
+                # colour-blind on purpose: group namespaces are year-distinct
+                # ('Group A' aerial vs 'Group A' manipulation never collide
+                # across subjects), while Core Skills groups are genuinely
+                # shared across years (all Core blocks are yellow).
+                if skey in ("par_group_1", "par_group_2"):
+                    pass  # handled above
+                else:
+                    hit = [l for l in my_labels
+                           if l in groups_in_block]
+                    if hit:
+                        attend, reason = True, f"{skey} {hit[0]}"
+                        matched_label = hit[0]
+            elif skey and hdr in (student_year, None) \
+                    and my_labels and weekday in my_days:
+                # Unmarked session in the student's colour on a day their
+                # group meets ('Acro | Lisa and Ethan', 'Stand up | Angie',
+                # 'Clown | George').
+                attend, reason = True, f"{skey} day session"
+                matched_label = _best_label(my_labels, joined)
+            elif skey == "context3" and "company meeting" in jl \
+                    and hdr == student_year:
+                # Whole-cohort company meeting (no group structure).
+                attend, reason = True, "company meeting"
             if not attend:
                 continue
-            # afternoon heuristic from start row (>= ~17 is noon onwards)
-            t = block_times(b["time_text"], afternoon_hint=b["start_row"] >= 15)
+            # Sessions never start before 8am, so '1.45 - 3.15' is pm by
+            # construction (block_times rolls hours < 8 forward). Dense
+            # morning columns sit low on the sheet, so a row-based pm guess
+            # would silently shift 11.45am to 23:45 and drop the session
+            # (end <= start) -- only reinterpret as pm when the straight
+            # parse is impossible.
+            t = block_times(b["time_text"])
             if not t:
                 continue
             (sh, sm), (eh, em) = t
             start = dt.datetime(date.year, date.month, date.day, sh, sm)
             end = dt.datetime(date.year, date.month, date.day, eh, em)
             if end <= start:
-                continue
+                if sh >= 12:
+                    continue
+                start += dt.timedelta(hours=12)
+                end += dt.timedelta(hours=12)
+                if end <= start:
+                    continue
             teachers = teachers_of(texts)
+            # One shared slot can hold several 1-to-1s ('Lucy - Joe |
+            # Tan - Jonathan'): title the event from this student's own
+            # session, not their slot-neighbour's.
+            title_texts = texts
+            if named:
+                mine = [t for t in texts
+                        if _explicit_hit(pre_dash(t), candidates)]
+                if len(mine) == 1:
+                    others = [t for t in texts if t != mine[0]
+                              and re.search(r"\w\s+-\s*|\s*-\s+\w", t)
+                              and not TIME_RANGE_RE.search(t)]
+                    if others:
+                        title_texts = mine
             events.append({
                 "date": date, "day": s.strip(), "start": start, "end": end,
-                "name": display_event_name(texts, skey, me, groups_in_block),
+                "name": display_event_name(
+                    title_texts, skey, matched_label),
                 "location": b["location"],
                 "teachers": teachers, "reason": reason,
                 "texts": texts, "subject_key": skey,
@@ -723,8 +1178,18 @@ def extract_for_student(wb, name, monday=None, cal_year=2026, cal_month=9,
     return uniq, me, matched_year
 
 
+def _best_label(labels, joined):
+    """The student's own label most likely naming this session (appears in
+    the block text); else the first label (no title suffix then)."""
+    jl = joined.lower()
+    for lab in labels:
+        if lab.lower() in jl:
+            return lab
+    return ""
+
+
 def to_ics(events, name):
-    now = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    now = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
@@ -793,7 +1258,8 @@ def main():
         wb, a.name, monday=monday, cal_year=cal_year, cal_month=9,
         start_year=a.year, filename=a.file)
     if me:
-        print(f"Groups for {a.name} (Year {matched_year}): {me}")
+        flat = {s: v.get("labels", []) for s, v in me.items()}
+        print(f"Groups for {a.name} (Year {matched_year}): {flat}")
     else:
         print(f"{a.name} not found in Year {a.year} groups"
               + (" (nor 2/3)" if a.year == 1 else "") + " - explicit/all-years matches only")
