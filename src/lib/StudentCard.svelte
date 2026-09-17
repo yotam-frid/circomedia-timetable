@@ -70,7 +70,7 @@
             end: ev.start,
             title: "Free time",
             location: "",
-            free: true
+            free: true,
           });
         }
       }
@@ -174,38 +174,37 @@
   <section aria-label="Class schedule">
     <div class="flex items-center justify-center py-2">
       <div class="flex items-center gap-1">
-      <button
-        type="button"
-        onclick={prevDay}
-        disabled={calState !== "ready" || dayIndex <= 0}
-aria-label="Previous day"
+        <button
+          type="button"
+          onclick={prevDay}
+          disabled={calState !== "ready" || dayIndex <= 0}
+          aria-label="Previous day"
           class="cursor-pointer rounded-lg px-3 py-1.5 text-xl leading-none transition disabled:cursor-default disabled:text-ink-300 disabled:opacity-40 not-disabled:text-ink-800 not-disabled:hover:bg-cream-100 not-disabled:hover:text-coral-600"
-      >
-        <ArrowLeft class="h-5 w-5" />
-      </button>
-      <span class="inline-block w-24 whitespace-nowrap text-center text-base font-medium text-ink-800">
-        {#if current}
-          {formatDayLabel(current.key)}
-        {:else}
-          &nbsp;
-        {/if}
-      </span>
-      <button
-        type="button"
-        onclick={nextDay}
-        disabled={calState !== "ready" || dayIndex >= days.length - 1}
-aria-label="Next day"
+        >
+          <ArrowLeft class="h-5 w-5" />
+        </button>
+        <span
+          class="inline-block w-24 whitespace-nowrap text-center text-base font-medium text-ink-800"
+        >
+          {#if current}
+            {formatDayLabel(current.key)}
+          {:else}
+            &nbsp;
+          {/if}
+        </span>
+        <button
+          type="button"
+          onclick={nextDay}
+          disabled={calState !== "ready" || dayIndex >= days.length - 1}
+          aria-label="Next day"
           class="cursor-pointer rounded-lg px-3 py-1.5 text-xl leading-none transition disabled:cursor-default disabled:text-ink-300 disabled:opacity-40 not-disabled:text-ink-800 not-disabled:hover:bg-cream-100 not-disabled:hover:text-coral-600"
-      >
-        <ArrowRight class="h-5 w-5" />
-      </button>
-    </div>
+        >
+          <ArrowRight class="h-5 w-5" />
+        </button>
+      </div>
     </div>
 
-    <div class="flex items-center justify-between gap-3 px-6 pb-1">
-      <span class="text-sm font-medium uppercase tracking-wider text-ink-400"
-        >Subscribe</span
-      >
+    <div class="flex items-center gap-3 px-4 pb-1">
       <div class="flex items-center gap-2">
         <a
           href={student.feed.webcal}
