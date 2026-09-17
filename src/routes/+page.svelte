@@ -50,13 +50,8 @@
           <StudentPicker matches={result.matches} {onpick} />
         {:else if result.status === "none"}
           <div class="rounded-2xl border border-line bg-white p-6 text-center">
-            <p class="text-ink-500">
-              No one called “{result.query}” in this term’s timetable.
-            </p>
-            <p class="mt-1 text-sm text-ink-400">
-              Check the spelling — or ask a classmate what name the register
-              uses.
-            </p>
+            <p class="text-ink-500">Couldn't find “{result.query}”.</p>
+            <p class="mt-1 text-sm text-ink-400">Check the spelling.</p>
           </div>
         {:else if result.status === "too-many"}
           <div class="rounded-2xl border border-line bg-white p-6 text-center">
@@ -78,8 +73,7 @@
 
   <footer class="mt-14 border-t border-line py-8 text-center">
     <p class="text-sm text-ink-400">
-      Timetable updated <span class="text-ink-500">{updated}</span> · changes reach
-      your calendar within about an hour.
+      Updated <span class="text-ink-500">{updated}</span>
     </p>
   </footer>
 </main>
