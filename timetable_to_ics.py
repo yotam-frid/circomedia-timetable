@@ -10,11 +10,18 @@ Procedure:
      rows 6+ members. Row5 is a true group label only when BOLD
      ('Group 1', 'Major', ...). An unbolded row5 person-name ('Billie',
      'James', 'Bee', ...) is the column's FIRST MEMBER (peer-group model:
-     groups are named after a member); staff-only names ('Nicky', 'Joe',
-     ...) and apparatus notes ('Maya - Hoop', 'Charlie straps', 'Lewis
-     (Nicky)') are session descriptors and grant no membership.
-     Apparatus/booking cells ('X - Hoop', duets, '?????' garble, week
-     notes) never mint students. Membership carries the column's weekday(s).
+      groups are named after a member); staff-only names ('Nicky', 'Joe',
+      ...) and dash-form apparatus bookings ('Maya - Hoop', 'James - Rod')
+      are session descriptors and grant no membership. Dash-less apparatus
+      annotations ('Charlie straps', 'Charlie rope') and duets
+      ('Oakley & Joanna', 'Lucy & Nem') name real students and resolve to
+      them (verified against the roster, so nothing unverified is ever
+      minted); parenthesised staff credits ('Lewis (Nicky)') still grant
+      nothing.
+      Dash-form apparatus bookings ('X - Hoop'), '?????' garble and week
+      notes never mint students; duets and annotations grant membership
+      only when every named person verifies as a student. Membership
+      carries the column's weekday(s).
   2. Read every day sheet (Mon-Fri). Each location column splits into time
      blocks anchored by time-range headers (including dashless '2.15 3.30'
      sub-headers); names embedded in header cells are recovered.
@@ -115,10 +122,64 @@ TEACHER_FULLNAMES = {t for t in TEACHERS if " " in t or "-" in t}
 # Subjects with no group structure: the whole year attends.
 WHOLE_COHORT = {"teacher_training"}
 
-# Apparatus / booking vocabulary: cells carrying these are session notes,
-# never students and never group labels.
-APPARATUS_RE = re.compile(
-    r"\bhoop|rod\b|straps|rope\b|trapeze|silks?|dance trap\b", re.I)
+# Apparatus vocabulary lives in APPARATUS_TOKEN_RE below. Note there is
+# deliberately NO blanket apparatus regex anymore: whether an annotated
+# cell grants membership is decided per-cell by _member_names (verified
+# student + not a teacher + not a dash-form booking), never by the mere
+# presence of an apparatus word.
+# Whole-word apparatus tokens for cleaning member names: 'Charlie straps'
+# -> 'Charlie', 'Billie (minor) dance trap' -> 'Billie'. Dash-form
+# bookings ('Maya - Hoop', 'James - Rod') are deliberately NOT cleaned --
+# they are session schedules and must stay excluded (see
+# _is_apparatus_booking).
+APPARATUS_TOKEN_RE = re.compile(
+    r"\b(?:hoop|rod|straps|rope|trapeze|silks?|dance\s*trap)\b", re.I)
+
+
+def _is_apparatus_booking(text):
+    """Dash-form apparatus booking ('Maya - Hoop', 'Finley - Rod',
+    'James - Rod', 'Rose - Hoop TBC'): a session schedule, never group
+    membership. Anything without a dash-apparatus tail ('Charlie straps',
+    'Charlie rope', 'Oakley & Joanna') is a person annotation and keeps
+    flowing into verification."""
+    parts = DASH_SPLIT_RE.split((text or "").strip(), maxsplit=1)
+    return len(parts) > 1 and bool(APPARATUS_TOKEN_RE.search(parts[1]))
+
+
+def _clean_member_text(seg):
+    """A group-sheet name segment with decoration removed: parenthesised
+    credits ('(minor)', '(Nicky)'), teacher full names, apparatus words and
+    stray 'TBC'. Pure text, unverified."""
+    t = re.sub(r"\(.*?\)", "", seg)
+    for full in TEACHER_FULLNAMES:
+        t = re.sub(re.escape(full), " ", t, flags=re.I)
+    t = APPARATUS_TOKEN_RE.sub(" ", t)
+    t = re.sub(r"\btbc\b", " ", t, flags=re.I)
+    return " ".join(t.split())
+
+
+def _member_names(text, verify_all):
+    """Single-person segments of a group-sheet cell, each resolved to a
+    verified student: 'Charlie straps' -> ['Charlie'];
+    'Lucy & Nem' -> ['Lucy', 'Nem']. Empty when the cell grants nothing:
+    dash-form apparatus bookings ('Maya - Hoop'), teachers, junk, or
+    anything unverified (all-or-nothing for '&' duets, so '&' pairs never
+    mint phantoms)."""
+    t = (text or "").strip()
+    if _cell_is_junk(t):
+        return []
+    if _is_apparatus_booking(t):
+        return []
+    segs = []
+    for part in t.split("&"):
+        clean = _clean_member_text(part)
+        if not clean:
+            return []
+        norm = roster_norm(clean) or clean.lower()
+        if norm not in verify_all or clean.lower() in TEACHERS:
+            return []
+        segs.append(clean)
+    return segs
 
 
 def make_uid(date, start, end, subject_key):
@@ -444,18 +505,24 @@ def _cell_is_junk(name):
 
 def _row5_kind(label):
     """Classify a row5 group descriptor: 'label' (true Group X-style label),
-    'apparatus' (booking descriptor, grants nothing), 'teacher' (staff-only
-    name, grants nothing) or 'peer' (verified-student name: label AND first
-    member -- decided by the caller against the verify set)."""
+    'apparatus' (dash-form apparatus booking like 'Maya - Hoop', which
+    grants nothing), 'teacher' (staff-only name, grants nothing) or 'peer'
+    (a person name, possibly carrying an apparatus/annotation/duet marker
+    -- 'Charlie straps', 'Oakley & Joanna', 'Billie (minor) dance trap':
+    label AND first member -- decided by the caller against the verify
+    set)."""
     lab = (label or "").strip()
     if not lab:
         return "empty"
-    if APPARATUS_RE.search(lab) or "&" in lab:
+    if _is_apparatus_booking(lab):
         return "apparatus"
-    if re.search(r"\(.*?\)", lab):
-        return "apparatus"  # 'Lewis (Nicky)', 'Billie (minor) ...'
-    if lab.lower() in TEACHERS:
+    if re.sub(r"\(.*?\)", "", lab).strip().lower() in TEACHERS:
         return "teacher"
+    # Person-name annotations and duets are peer first-members; the
+    # major/minor label test must not fire on '(minor)' decorations.
+    stripped = _clean_member_text(lab.replace("&", " "))
+    if stripped and re.fullmatch(r"[A-Za-z][A-Za-z .'-]*", stripped):
+        return "peer"
     if GROUP_RE.search(lab) or re.search(
             r"\bmajor\b|\bminor\b", lab, re.I):
         return "label"
@@ -513,6 +580,10 @@ def parse_year_sheet(wb, n, verify=frozenset()):
     membership_cols = {c for c, k in col_kind.items()
                        if k in ("label", "peer")}
     # Rows-6+ human names from membership columns (verify set contribution).
+    # Raw text only: these never become member keys, they feed the verify
+    # set via roster_norm below ('Charlie straps' verifies as Charlie;
+    # 'Lucy & Nem' or 'Maya - Hoop' normalise to nothing verifiable and
+    # die there, harmlessly).
     rownames = set()
     for r in range(6, ws.max_row + 1):
         for c in membership_cols:
@@ -520,8 +591,7 @@ def parse_year_sheet(wb, n, verify=frozenset()):
             if not v or not str(v).strip():
                 continue
             name = str(v).strip()
-            if _cell_is_junk(name) or APPARATUS_RE.search(name) \
-                    or "&" in name:
+            if _cell_is_junk(name):
                 continue
             base = re.sub(r"\(.*?\)", "", name).strip() or name
             rownames.add(base.lower())
@@ -561,11 +631,14 @@ def parse_year_sheet(wb, n, verify=frozenset()):
             lab = col_label[c]
             gm = GROUP_RE.search(lab)
             labels.append(f"Group {gm.group(1).upper()}" if gm else lab)
-        elif (roster_norm(col_label[c]) or col_label[c].lower()) \
-                in verify_all or col_label[c].lower() in TEACHERS:
+        elif _member_names(col_label[c], verify_all) \
+                or col_label[c].lower() in TEACHERS:
             # Person-named columns are never named after the person: the
             # row5 name (Jasmine, Bee, Billie, Pipper, ...) is just its
-            # first member. Year-2-style day-identified groups take the
+            # first member; annotated row5s ('Charlie straps',
+            # 'Oakley & Joanna', 'Billie (minor) dance trap') resolve to
+            # their verified students the same way. Year-2-style
+            # day-identified groups take the
             # weekday (Mon Clown, Wed Conditioning, ...); PAR
             # takes its header number (Group 1 / Group 2). Year-3 company
             # columns (Billie, Pipper, ...) likewise resolve to the days
@@ -585,20 +658,22 @@ def parse_year_sheet(wb, n, verify=frozenset()):
             if not v or not str(v).strip():
                 continue
             name = str(v).strip()
-            if _cell_is_junk(name) or APPARATUS_RE.search(name) \
-                    or "&" in name:
-                continue
-            base = re.sub(r"\(.*?\)", "", name).strip() or name
-            if n == 1 and base.lower() == "abigail" and key in (
-                    "context1", "devising", "movement"):
-                continue  # tutor-group label, not a student (Year 1)
-            for lab in labels:
-                add(base.lower(), key, lab, days)
+            # Cells resolving to verified students only: apparatus
+            # annotations ('Charlie straps'), duets ('Lucy & Nem') and
+            # plain names grant membership; dash-form bookings
+            # ('Maya - Hoop'), teachers, junk and anything unverified die.
+            for seg in _member_names(name, verify_all):
+                if n == 1 and seg.lower() == "abigail" and key in (
+                        "context1", "devising", "movement"):
+                    continue  # tutor-group label, not a student (Year 1)
+                for lab in labels:
+                    add(seg.lower(), key, lab, days)
         if kind == "peer":
-            lab = col_label[c]
-            if (roster_norm(lab) or lab.lower()) in verify_all:
+            # Row5 is the column's first member: annotated/duet row5s add
+            # each verified student ('Charlie straps' -> Charlie).
+            for seg in _member_names(col_label[c], verify_all):
                 for dl in labels:
-                    add(lab.lower(), key, dl, days)
+                    add(seg.lower(), key, dl, days)
     return people, rownames
 
 

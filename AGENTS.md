@@ -37,7 +37,7 @@ runs ONLY when `src/` / `svelte.config.js` / `package.json` change.
 | `sync.py` | Orchestrator: fetch → hash-check → build → publish. Enforces 07:00–22:00 London window itself (launchd fires 24/7) |
 | `fetch_sharepoint_timetable.py` | Playwright scraper, persistent profile in `.sharepoint-browser-profile/` |
 | `src/routes/api/student/+server.js` | JSON search over Blob `roster.json`. Statuses: match/picker/none/too-many/empty; student carries `feed: {https, webcal, google}` built from request origin |
-| `src/routes/api/meta/+server.js` | JSON freshness `{updated_at}`; frontend formats via `formatUpdated()` |
+| `src/routes/api/meta/+server.js` | JSON freshness `{updated_at}` (newest of roster/manifest stamps); frontend formats via `formatUpdated()` |
 | `src/routes/feeds/[slug]/+server.js` | .ics proxy: strips `.ics` suffix, checks slug against roster, ETag passthrough, 300s cache headers |
 | `src/lib/api.js` | Client lego: `searchStudent`, `pickStudent`, `fetchMeta`, `formatUpdated`, `prettySubject`, `feedUrls`, `copyText` |
 | `src/lib/StudentSearch.svelte` etc. | Styled components (search box / card / picker) with a Claude-website-inspired look: warm cream bg, serif headings, coral accent |
@@ -78,6 +78,19 @@ back to the store's public URL otherwise, so `pnpm dev` works against live
 Blob data out of the box. (`vercel env pull .env.local` only if you need
 private env values locally; never commit that file.)
 
+To develop against fresh local data instead of the published store (and skip
+the 300s server roster cache, which no browser hard-reload can clear):
+
+```sh
+python3 build_feeds.py                  # refresh site/ from incoming/ (no publish)
+LOCAL_SITE_DIR=$PWD/site pnpm dev       # API + feeds read site/ from disk, caches off
+```
+
+Without `LOCAL_SITE_DIR`, dev reads Blob with the same 300s caches as prod.
+Code-only matcher changes never trigger a publish on their own (`sync.py`
+skips the build when no xlsx changed) — run
+`python3 sync.py --force --no-fetch` to rebuild + publish from `incoming/`.
+
 **A build is not required after every UI change.** `pnpm dev` hot-reloads
 components, so iterate there; only run `pnpm build` when you need to verify
 the Vercel production build (or before deploying).
@@ -95,7 +108,7 @@ the Vercel production build (or before deploying).
 3. **Group match**, subject-scoped and multi-label: `Group X` labels strict (PAR GROUP N matches PAR subjects only, never plain `Group N`); unmarked sessions in the student's colour match on the column weekday their group meets (`Acro | Lisa and Ethan`, `Stand up | Angie`, `Clown | George`); dashless `2.15 3.30` sub-headers split blocks (Thu Acro minors).
    Subjects include `teacher_training` (whole Year-2 cohort, `Jono`), `clown`, `stand_up`, `context2`/`context3` (split from `context1`; `Pro Tour` → context3), `par_group_1/2`, and `PT` → physical_theatre. `PT Minors | research & materials | On teams` is helper text inside the PAR slot, not a session.
 
-Roster (`parse_roster`): union of raw year sheets, NO Core-Skills merge for attribution. Row5 is a true label only when **bold** (`Group 1`, `Major`, `All`, `Minors`); an unbolded row5 person-name is the column's **first member** iff verifiably a student elsewhere (`Billie`, `James`, `Bee`…), otherwise a staff/apparatus descriptor granting nothing. Person names are NEVER group labels: day-identified columns take the weekday (`Monday` Clown, `Wednesday` Conditioning, `Wednesday + Friday` Manipulation), PAR takes its header number (`Group 1` / `Group 2`, displayed under subject `PAR`). Whole-cohort single-group subjects (`movement`/`context2`/`conditioning` in Year 2, `context3` in Year 3) are hidden from cards but still match events. Apparatus bookings (`X - Hoop`, `&` duets, `?` garble, week notes) never mint students. Spelling variants merge by `roster_norm` (`farrah (minor)`→`farrah`); nicknames merge by `MERGE_MAP` (`pip`→`pipper`, `fin`→`finley`, `meg`→`megan`, `maddie`→`madeline`, `jj`→`jjangel` displayed `JJ Angel`); junk dropped. `lookup_merged` unions variant groups within the matched year. Slugs via `slugify`, collision-safe (`-2` suffix).
+Roster (`parse_roster`): union of raw year sheets, NO Core-Skills merge for attribution. Row5 is a true label only when **bold** (`Group 1`, `Major`, `All`, `Minors`); an unbolded row5 person-name is the column's **first member** iff verifiably a student elsewhere (`Billie`, `James`, `Bee`…),   otherwise a staff/apparatus descriptor granting nothing. Person names are NEVER group labels: day-identified columns take the weekday (`Monday` Clown, `Wednesday` Conditioning, `Wednesday + Friday` Manipulation), PAR takes its header number (`Group 1` / `Group 2`, displayed under subject `PAR`). Whole-cohort single-group subjects (`movement`/`context2`/`conditioning` in Year 2, `context3` in Year 3) are hidden from cards but still match events. Dash-form apparatus bookings (`X - Hoop`), `?` garble and week notes never mint students; dash-less annotations (`Charlie straps`) and `&` duets resolve to verified members (see lessons). Spelling variants merge by `roster_norm` (`farrah (minor)`→`farrah`); nicknames merge by `MERGE_MAP` (`pip`→`pipper`, `fin`→`finley`, `meg`→`megan`, `maddie`→`madeline`, `jj`→`jjangel` displayed `JJ Angel`); junk dropped. `lookup_merged` unions variant groups within the matched year. Slugs via `slugify`, collision-safe (`-2` suffix).
 
 ICS output: deterministic UIDs (`sha1(date|start|end|subject)@circomedia`), `SEQUENCE:0` always, `REFRESH-INTERVAL:PT30M`, Europe/London VTIMEZONE, **RFC 5545 line folding** (Google rejects unfolded lines; Apple doesn't care).
 
@@ -144,7 +157,9 @@ ICS output: deterministic UIDs (`sha1(date|start|end|subject)@circomedia`), `SEQ
 - **Row-5 formatting carries semantics.** Bold row5 = group label (`Group 1`,
   `Major`); unbolded row5 person-name = the column's *first member* (the
   sheets use a peer-group model: Billie/Pipper/DeeDee/James/Bee head their
-  own columns). Staff-only names and apparatus notes in row5 grant nothing.
+   own columns). Staff-only names and dash-form apparatus bookings in row5
+   grant nothing; dash-less annotated/duet row5s resolve to verified
+   members (see booking-cells lesson below).
   This was confirmed from formatted screenshots, not guessed — when the parse
   is ambiguous, ask for one.
 - **Helper text is not a session.** `PT Minors | research & materials | On
@@ -152,10 +167,17 @@ ICS output: deterministic UIDs (`sha1(date|start|end|subject)@circomedia`), `SEQ
   Rule of thumb: slot identity comes from header colour + primary subject
   structure; stray body lines grant no attendance (subject-scoped matching
   enforces this for free).
-- **Booking cells mint phantom students.** `X - Hoop/Rod`, `straps`/`rope`
-  cells, `&` duets, `?` garble, `need X,` roster notes and teacher names in
-  apparatus columns all look like members to a naive parser. Filters live in
-  `_cell_is_junk` + `_row5_kind` + the apparatus regex; the `THIN:` stderr
+- **Booking cells mint phantom students.** Dash-form `X - Hoop/Rod` bookings,
+  `?` garble, `need X,` roster notes and teacher names in apparatus columns
+  all look like members to a naive parser and grant nothing. But dash-less
+  `Name + apparatus` annotations (`Charlie straps`, `Charlie rope`,
+  `Billie (minor) dance trap`) and `&` duets (`Oakley & Joanna`,
+  `Lucy & Nem`) ARE real students — they resolve to roster-verified members
+  via `_member_names` (apparatus/parens stripped, all-or-nothing for duets,
+  teachers excluded), and an annotated row5 makes its day-column a peer
+  column instead of killing it for everyone (this exact bug once dropped the
+  whole Tue/Wed/Thu Year-3 Aerial grid). Filters live in `_cell_is_junk` +
+  `_row5_kind` + `_member_names`; the `THIN:` stderr
   report in `build_feeds.py` (< 8 events) is the tripwire — advisory, never
   fatal. Teacher-names-that-are-only-teachers (Janine/Nicky/Joe/Lewis,
   Jonathan-as-student) die here too: anyone absent from every all-hands
