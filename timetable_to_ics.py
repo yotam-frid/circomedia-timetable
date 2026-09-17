@@ -1166,6 +1166,10 @@ def extract_for_student(wb, name, monday=None, cal_year=2026, cal_month=9,
                 if t not in prev["teachers"]:
                     prev["teachers"].append(t)
     uniq = sorted(merged.values(), key=lambda e: e["start"])
+    # Session spread across both gym bays is just "Gym" to the user.
+    for e in uniq:
+        if e["location"] == "Gym Bay 1 + Gym Bay 2":
+            e["location"] = "Gym"
     # Impossibility guard: one student can't be in two places at once.
     # Any remaining overlap is a spreadsheet typo or matching bug -- shout
     # loudly instead of silently writing an impossible .ics.
