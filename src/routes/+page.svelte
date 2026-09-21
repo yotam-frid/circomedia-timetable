@@ -23,8 +23,8 @@
     result = r;
   }
 
-  async function onpick(name) {
-    result = await pickStudent(name).catch(() => ({ status: "error" }));
+  async function onpick(name, kind) {
+    result = await pickStudent(name, kind).catch(() => ({ status: "error" }));
   }
 
   onMount(async () => {
@@ -60,7 +60,7 @@
 
   <section class="flex flex-1 flex-col mt-1">
     {#if result.status === "empty"}
-      <span class="max-w-sm mb-4">Enter your <b>first name</b>.</span>
+      <span class="max-w-sm mb-4">Enter your <b>first name</b> or a <b>space's name</b>.</span>
     {/if}
     <StudentSearch {onresult} initialQuery={restoredQuery} />
 

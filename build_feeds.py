@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""Build per-student calendar feeds from every week's timetable.
+"""Build per-student and per-space calendar feeds from every week's timetable.
 
 Reads all 'Term * Weeks? N[...].xlsx' files in incoming/, derives the roster
 from the latest week file (timetable_to_ics.parse_roster), extracts each
 student's lessons across all weeks, and writes:
 
-  site/feeds/<slug>.ics   one feed per student (deterministic UIDs)
-  site/roster.json         [{name, slug, year}] — search index for the web app
-  site/manifest.json       {updated_at, feeds: {slug: sha256}} — change tracking
+  site/feeds/<slug>.ics         one feed per student (deterministic UIDs)
+  site/feeds/spaces/<slug>.ics  one feed per bookable space (Gym Bay 1+2
+                                merge into 'Gym'; see canonical_space)
+  site/roster.json               [{name, slug, year}] — search index
+  site/spaces.json               [{name, slug}] — space search index
+  site/manifest.json             {updated_at, feeds: {slug: sha256}} — change
+                                 tracking (space feeds keyed 'spaces/<slug>')
 
 Feeds whose content hash is unchanged are left untouched (mtime preserved),
 so publish.py can upload only what changed.
@@ -199,21 +203,61 @@ def main():
     students = [{"name": roster[k]["name"], "slug": slugs[k],
                  "year": roster[k]["year"],
                  "groups": latest_groups.get(k, {})} for k in sorted(roster)]
+    # Spaces: every timetabled block occupies its room, so each space feed
+    # is the union of its canonical locations across all weeks (Gym Bay 1+2
+    # -> 'Gym': free means neither bay has a class). They live under
+    # feeds/spaces/ so student slugs can never collide with them.
+    spaces_dir = feeds_dir / "spaces"
+    spaces_dir.mkdir(parents=True, exist_ok=True)
+    spaces = set()
+    for _, wb, _ in weeks:
+        spaces |= tt.list_spaces(wb)
+    space_slugs = assign_slugs({s: {"name": s} for s in spaces})
+    space_counts = {}
+    for canon in sorted(spaces):
+        slug = space_slugs[canon]
+        all_events = []
+        for f, wb, _ in weeks:
+            all_events.extend(tt.extract_for_space(wb, canon, filename=f.name))
+        all_events.sort(key=lambda e: (e["date"], e["start"]))
+        seen = {}
+        for e in all_events:
+            seen[tt.make_space_uid(e["date"], e["start"], e["end"],
+                                   e.get("subject_key"), e["name"])] = e
+        unique = [seen[k] for k in sorted(seen)]
+        space_counts[slug] = len(unique)
+        ics = tt.to_ics(unique, canon)
+        dest = spaces_dir / f"{slug}.ics"
+        manifest_feeds[f"spaces/{slug}"] = sha256_text(normalize_ics(ics))
+        if dest.exists() and sha256_text(normalize_ics(dest.read_text())) == \
+                manifest_feeds[f"spaces/{slug}"]:
+            continue  # unchanged: keep mtime so publish skips it
+        dest.write_text(ics)
+        built += 1
+
     now = dt.datetime.now(LONDON)
     write_json_if_changed(out / "roster.json",
                           {"updated_at": now.isoformat(), "students": students})
+    write_json_if_changed(out / "spaces.json",
+                          {"updated_at": now.isoformat(),
+                           "spaces": [{"name": s, "slug": space_slugs[s]}
+                                      for s in sorted(spaces)]})
     write_json_if_changed(out / "manifest.json",
                           {"updated_at": now.isoformat(), "feeds": manifest_feeds})
 
-    # Prune feeds for students no longer on the roster (renames/merges).
-    wanted = {f"{s}.ics" for s in manifest_feeds}
-    for f in feeds_dir.glob("*.ics"):
-        if f.name not in wanted:
+    # Prune feeds for students/spaces no longer present (renames/merges).
+    # Keys with a slash live in subdirs ('spaces/gym' -> spaces/gym.ics).
+    wanted = {f"{k}.ics" for k in manifest_feeds}
+    for f in feeds_dir.rglob("*.ics"):
+        if f.relative_to(feeds_dir).as_posix() not in wanted:
             f.unlink()
-            print(f"pruned stale {f.name}")
+            print(f"pruned stale {f.relative_to(out).as_posix()}")
 
-    print(f"Roster: {len(students)} students from {len(files)} week files; "
+    print(f"Roster: {len(students)} students, {len(space_counts)} spaces "
+          f"from {len(files)} week files; "
           f"{built} feeds written/updated -> {out}/")
+    for slug in sorted(space_counts):
+        print(f"SPACE:{slug}:{space_counts[slug]} events")
 
     # Thin-feed tripwire: suspiciously small feeds are usually matching
     # mistakes (phantom students are gone by construction now). Advisory

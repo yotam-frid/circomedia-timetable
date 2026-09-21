@@ -385,8 +385,10 @@ MERGE_MAP = {
     "meg": "megan",
     "maddie": "madeline",
     "jj": "jjangel",
+    "jj angel": "jjangel",
     "charlierope": "charlie",
     "charliestraps": "charlie",
+    "deedee": "dee dee",
 }
 
 
@@ -1280,6 +1282,136 @@ def extract_for_student(wb, name, monday=None, cal_year=2026, cal_month=9,
                   f"overlaps {cur['start'].strftime('%H:%M')}-{cur['end'].strftime('%H:%M')} "
                   f"{cur['name']} @ {cur['location']}", file=sys.stderr)
     return uniq, me, matched_year
+
+
+# Bookable spaces: raw location headers -> canonical space. Gym Bay 1/2 are
+# one bookable unit ('Gym': free means neither bay has a class); 'Also
+# Batcave' is Batcave overflow and merges the same way. Parenthesised
+# booking notes ('Studio 5 (12-3.45)') are not part of the name.
+SPACE_ALIASES = {
+    "gym bay 1": "Gym",
+    "gym bay 2": "Gym",
+    "also batcave": "Batcave",
+    "batcave": "Batcave",
+}
+
+
+def canonical_space(location):
+    """'Gym Bay 1' -> 'Gym', 'Studio 5 (12-3.45)' -> 'Studio 5'."""
+    loc = re.sub(r"\s*\(.*?\)\s*$", "", (location or "")).strip()
+    loc = " ".join(loc.split())
+    if not loc:
+        return None
+    return SPACE_ALIASES.get(loc.lower(), loc)
+
+
+def list_spaces(wb, legend=None):
+    """Canonical bookable spaces with at least one block, across Mon-Fri."""
+    if legend is None:
+        legend = parse_legend(wb)
+    out = set()
+    for s in wb.sheetnames:
+        if not any(s.strip().lower().startswith(d) for d in DAY_ORDER):
+            continue
+        _, blocks = detect_blocks(wb[s], legend)
+        for b in blocks:
+            canon = canonical_space(b["location"])
+            if canon:
+                out.add(canon)
+    return out
+
+
+def make_space_uid(date, start, end, subject_key, name):
+    """Deterministic UID for space bookings. Unlike make_uid the class name
+    is part of the key: two different classes can share one slot across
+    bays (Batcave vs Also Batcave) and must not collapse into one event."""
+    raw = (f"{date.isoformat()}|{start:%H:%M}|{end:%H:%M}|"
+           f"{subject_key or 'unknown'}|{name}")
+    return f"{hashlib.sha1(raw.encode()).hexdigest()[:16]}@circomedia"
+
+
+def extract_for_space(wb, space, monday=None, cal_year=2026, cal_month=9,
+                      filename=None):
+    """Every timetabled block in one bookable space, across Mon-Fri.
+
+    No matcher filtering: any block with content occupies the room, so the
+    gaps between events are exactly when the space is free. Merged
+    bays ('Gym Bay 1 + Gym Bay 2') shorten to 'Gym', same as student feeds.
+    """
+    legend = parse_legend(wb)
+    if monday is None and filename:
+        monday = monday_from_filename(filename)
+    day_sheets = [s for s in wb.sheetnames
+                  if any(s.strip().lower().startswith(d) for d in DAY_ORDER)]
+    # order Mon..Fri
+    day_sheets.sort(key=lambda s: next(i for i, d in enumerate(DAY_ORDER)
+                                       if s.strip().lower().startswith(d)))
+    events = []
+    for s in day_sheets:
+        ws = wb[s]
+        weekday = next(i for i, d in enumerate(DAY_ORDER) if s.strip().lower().startswith(d))
+        dm = re.search(r"(\d{1,2})", s)
+        if monday:
+            date = monday + dt.timedelta(days=weekday)
+        elif dm:
+            date = dt.date(cal_year, cal_month, int(dm.group(1)))
+        else:
+            date = dt.date(cal_year, cal_month, 1) + dt.timedelta(days=weekday)
+        _, blocks = detect_blocks(ws, legend)
+        for b in blocks:
+            if canonical_space(b["location"]) != space:
+                continue
+            texts = [t for t in block_texts(ws, b)
+                     if t.strip().lower() != "closed"
+                     and "student training ends" not in t.lower()]
+            if not texts:
+                continue
+            skey = block_subject_key(texts)
+            # Same pm rule as extract_for_student: sessions never start
+            # before 8am (block_times rolls hours < 8 forward); only
+            # reinterpret as pm when the straight parse is impossible.
+            t = block_times(b["time_text"])
+            if not t:
+                continue
+            (sh, sm), (eh, em) = t
+            start = dt.datetime(date.year, date.month, date.day, sh, sm)
+            end = dt.datetime(date.year, date.month, date.day, eh, em)
+            if end <= start:
+                if sh >= 12:
+                    continue
+                start += dt.timedelta(hours=12)
+                end += dt.timedelta(hours=12)
+                if end <= start:
+                    continue
+            events.append({
+                "date": date, "day": s.strip(), "start": start, "end": end,
+                "name": event_name(texts), "location": b["location"],
+                "teachers": teachers_of(texts), "reason": "space booking",
+                "texts": texts, "subject_key": skey,
+            })
+    # de-dupe: one class spread across merged bays is one event; distinct
+    # same-slot classes (Batcave vs Also Batcave) share a slot but keep
+    # their own names, so both stay visible.
+    merged = {}
+    for e in sorted(events, key=lambda e: e["start"]):
+        k = (e["start"], e["end"], e["name"])
+        if k not in merged:
+            merged[k] = e
+        else:
+            prev = merged[k]
+            locs = sorted(set(prev["location"].split(" + ") + [e["location"]]))
+            prev["location"] = " + ".join(locs)
+            for t in e["teachers"]:
+                if t not in prev["teachers"]:
+                    prev["teachers"].append(t)
+    uniq = sorted(merged.values(), key=lambda e: e["start"])
+    # Session spread across both gym bays is just "Gym" to the user.
+    for e in uniq:
+        if e["location"] == "Gym Bay 1 + Gym Bay 2":
+            e["location"] = "Gym"
+    # No CONFLICT guard here: overlapping same-slot classes across merged
+    # bays are normal for spaces (unlike for one student).
+    return uniq
 
 
 def _best_label(labels, joined):

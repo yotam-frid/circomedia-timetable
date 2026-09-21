@@ -1,18 +1,20 @@
 /** Lego pieces: tiny fetch helpers + formatters. Import what you need. */
 
-/** Search the roster. Returns the /api/student JSON payload verbatim:
+/** Search the roster (students + bookable spaces). Returns the
+ *  /api/student JSON payload verbatim:
  *  { status: "match"|"picker"|"none"|"too-many"|"empty", ... } */
-export async function searchStudent(name, { exact = false, signal } = {}) {
+export async function searchStudent(name, { exact = false, kind, signal } = {}) {
   const params = new URLSearchParams({ name });
   if (exact) params.set('exact', '1');
+  if (kind) params.set('kind', kind);
   const res = await fetch(`/api/student?${params}`, { signal });
   if (!res.ok) throw new Error('search failed');
   return res.json();
 }
 
 /** Pick one entry from a picker list (re-queries with exact=1). */
-export async function pickStudent(name) {
-  return searchStudent(name, { exact: true });
+export async function pickStudent(name, kind) {
+  return searchStudent(name, { exact: true, kind });
 }
 
 /** Freshness stamp: { updated_at: ISO|null }. */

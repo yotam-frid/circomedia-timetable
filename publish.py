@@ -111,7 +111,14 @@ def main():
     if not roster.exists() or not manifest.exists():
         sys.exit(f"run build_feeds.py first ({site} has no roster/manifest)")
 
-    files = sorted((site / "feeds").glob("*.ics")) + [roster, manifest]
+    # Student feeds, space feeds (feeds/spaces/*.ics), and the JSON indexes.
+    # Pathnames mirror the site/ tree: feeds/<slug>.ics,
+    # feeds/spaces/<slug>.ics, roster.json, spaces.json, manifest.json.
+    files = sorted((site / "feeds").rglob("*.ics"))
+    for name in ("roster.json", "spaces.json", "manifest.json"):
+        p = site / name
+        if p.exists():
+            files.append(p)
     state = load_state()
     published = state.get("published_hashes") or {}
 
@@ -119,7 +126,10 @@ def main():
     new_hashes = {}
     for f in files:
         digest = sha256(f)
-        pathname = f.name if f.suffix == ".json" else f"feeds/{f.name}"
+        if f.suffix == ".json":
+            pathname = f.name
+        else:
+            pathname = f"feeds/{f.relative_to(site / 'feeds').as_posix()}"
         new_hashes[pathname] = digest
         if not a.force and published.get(pathname) == digest:
             skipped += 1

@@ -62,6 +62,14 @@ export function getRoster() {
   return cached('roster', ROSTER_TTL, () => getJson('/roster.json'));
 }
 
+/** Space index { spaces: [{ name, slug }] }. Missing (not yet published)
+ *  reads as empty so student search keeps working. */
+export function getSpaces() {
+  return cached('spaces', ROSTER_TTL, () =>
+    getJson('/spaces.json').catch(() => ({ spaces: [] }))
+  );
+}
+
 export function getManifest() {
   return cached('manifest', ROSTER_TTL, () => getJson('/manifest.json'));
 }
@@ -69,9 +77,18 @@ export function getManifest() {
 export const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /** Calendar URLs for a feed slug, anchored at the request origin so
- *  preview deployments produce correct links automatically. */
+ *  preview deployments produce correct links automatically. Space feeds
+ *  live under /feeds/spaces/ so student slugs can never collide. */
 export function feedUrls(origin, slug) {
-  const https = `${origin}/feeds/${slug}.ics`;
+  return buildFeedUrls(origin, `/feeds/${slug}.ics`);
+}
+
+export function spaceFeedUrls(origin, slug) {
+  return buildFeedUrls(origin, `/feeds/spaces/${slug}.ics`);
+}
+
+function buildFeedUrls(origin, path) {
+  const https = `${origin}${path}`;
   const webcal = https.replace(/^https:\/\//, 'webcal://').replace(/^http:\/\//, 'webcal://');
   // Google's cid= deep-link only accepts webcal:// (since ~2025 it rejects
   // https:// feeds with "Unable to Add Calendar. Check the URL."; https still

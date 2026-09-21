@@ -9,15 +9,16 @@ Micro-app for Circomedia classmates: type your first name → see your groups
 ```
 Mac (launchd, every 15 min; SharePoint login ONLY works here)
   fetch_sharepoint_timetable.py --all --headless → incoming/Term*.xlsx
-  build_feeds.py                                → site/{feeds/*.ics, roster.json, manifest.json}
+  build_feeds.py                                → site/{feeds/*.ics, feeds/spaces/*.ics, roster.json, spaces.json, manifest.json}
   publish.py                                    → Vercel Blob (public store, only-changed uploads)
 Vercel (project: circomedia-timetable, SvelteKit + adapter-vercel)
   src/routes/+page.svelte   → search page (Svelte 5, no UI framework, no preamble)
   src/lib/*                 → lego pieces: api.js helpers + StudentSearch/Card/Picker
-  src/routes/api/student    → JSON search (status: match|picker|none|too-many|empty)
+  src/routes/api/student    → JSON search over Blob `roster.json` + `spaces.json` (status: match|picker|none|too-many|empty; entries carry kind: student|space)
   src/routes/api/meta       → JSON freshness {updated_at}
   src/routes/feeds/[slug]   → per-student .ics, proxied from Blob store
-  Blob store                → circomedia-feeds, feeds + roster.json + manifest.json
+  src/routes/feeds/spaces/[slug] → per-space .ics, proxied from Blob `feeds/spaces/`
+  Blob store                → circomedia-feeds, feeds + spaces feeds + roster/spaces/manifest JSON
 ```
 
 The API returns JSON only — never HTML. All rendering happens in Svelte
@@ -31,26 +32,27 @@ runs ONLY when `src/` / `svelte.config.js` / `package.json` change.
 
 | File | Role |
 |---|---|
-| `timetable_to_ics.py` | xlsx→ics core: group parsing, student matching, ICS emit. Pure logic, no I/O except CLI |
-| `build_feeds.py` | All-student builder → `site/`. Roster + slug assignment + manifest |
-| `publish.py` | Blob uploader (shells out to `vercel blob put`, `--allow-overwrite`, stable pathnames). Loads OIDC env from `.env.local`, refreshes token on auth failure |
+| `timetable_to_ics.py` | xlsx→ics core: group parsing, student matching, ICS emit. Pure logic, no I/O except CLI. Spaces: `canonical_space` (Gym Bay 1/2→Gym, Also Batcave→Batcave, paren notes stripped), `list_spaces`, `extract_for_space` (every block occupies the room), `make_space_uid` (name-keyed; never touch `make_uid` — student UIDs are subscription-stable) |
+| `build_feeds.py` | All-student builder → `site/`. Roster + slug assignment + manifest. Also builds `feeds/spaces/*.ics` + `spaces.json`; space manifest keys are `spaces/<slug>` |
+| `publish.py` | Blob uploader (shells out to `vercel blob put`, `--allow-overwrite`, stable pathnames). Loads OIDC env from `.env.local`, refreshes token on auth failure. Mirrors the `site/` tree: `feeds/*.ics`, `feeds/spaces/*.ics`, `roster.json`, `spaces.json`, `manifest.json` |
 | `sync.py` | Orchestrator: fetch → hash-check → build → publish. Enforces 07:00–22:00 London window itself (launchd fires 24/7) |
 | `fetch_sharepoint_timetable.py` | Playwright scraper, persistent profile in `.sharepoint-browser-profile/` |
-| `src/routes/api/student/+server.js` | JSON search over Blob `roster.json`. Statuses: match/picker/none/too-many/empty; student carries `feed: {https, webcal, google}` built from request origin |
+| `src/routes/api/student/+server.js` | JSON search over Blob `roster.json` + `spaces.json`. Statuses: match/picker/none/too-many/empty; entries carry kind: student|space (`kind` param disambiguates exact picks). Space matching ignores case+spacing (`southwing`→South Wing). Student carries `feed: {https, webcal, google}` built from request origin; spaces point at `feeds/spaces/` |
 | `src/routes/api/meta/+server.js` | JSON freshness `{updated_at}` (newest of roster/manifest stamps); frontend formats via `formatUpdated()` |
 | `src/routes/feeds/[slug]/+server.js` | .ics proxy: strips `.ics` suffix, checks slug against roster, ETag passthrough, 300s cache headers |
+| `src/routes/feeds/spaces/[slug]/+server.js` | Same for spaces: checks slug against `spaces.json`, proxies Blob `feeds/spaces/<slug>.ics` |
 | `src/lib/api.js` | Client lego: `searchStudent`, `pickStudent`, `fetchMeta`, `formatUpdated`, `prettySubject`, `feedUrls`, `copyText` |
-| `src/lib/StudentSearch.svelte` etc. | Styled components (search box / card / picker) with a Claude-website-inspired look: warm cream bg, serif headings, coral accent |
+| `src/lib/StudentSearch.svelte` etc. | Styled components (search box / card / picker) with a Claude-website-inspired look: warm cream bg, serif headings, coral accent. Space cards (`kind: "space"`): static header with a `Space` chip (not expandable, no groups section), gaps labelled `free for X` instead of `X break` |
 | `src/app.css` | Tailwind CSS **v4** entry (CSS-first config): `@theme` defines cream/ink/coral palette + serif/sans/mono fonts; `@layer base` sets body styles |
 | `src/routes/+layout.svelte` | Imports `app.css`; everything else renders in `+page.svelte` |
 | `src/routes/+page.js` | SPA shell: `prerender = true` + `ssr = false`. Page carries no data; all roster/feed fetching happens client-side |
-| `src/lib/server/blob.js` | Server-only Blob reader: `BLOB_BASE_URL` env with public-URL fallback, 300s in-memory roster cache |
+| `src/lib/server/blob.js` | Server-only Blob reader: `BLOB_BASE_URL` env with public-URL fallback, 300s in-memory roster cache. Also serves `spaces.json` (`getSpaces`, empty when unpublished) and `spaceFeedUrls` (`/feeds/spaces/…`) |
 | `svelte.config.js` | `adapter-vercel` (zero-config Vercel deploy; Framework Preset must be SvelteKit, not Python) |
 | `vite.config.js` | SvelteKit + `@tailwindcss/vite` plugins. V4 deps: `tailwindcss`, `@tailwindcss/vite` (+ `@sveltejs/vite-plugin-svelte`) |
 | `package.json` | SvelteKit app, **pnpm** (`dev`, `build`, `preview`). No Python requirements |
 | `pnpm-lock.yaml` | Committed — Vercel auto-detects pnpm from it; `packageManager` pins pnpm@10.9.0 (corepack-ready) |
 | `incoming/` | Downloaded xlsx (gitignored). Filenames carry week numbers (`Week 1` → Mon 14-09-2026) |
-| `site/` | Build output (gitignored): `feeds/*.ics`, `roster.json`, `manifest.json` |
+| `site/` | Build output (gitignored): `feeds/*.ics`, `feeds/spaces/*.ics`, `roster.json`, `spaces.json`, `manifest.json` |
 | `.sync_state.json` | (gitignored) `last_built_hashes` + `published_hashes` — what makes sync/publish idempotent |
 | `docs/feed.ics` | DEAD. Old single-student GitHub Pages feed, fully deprecated. Do not revive |
 

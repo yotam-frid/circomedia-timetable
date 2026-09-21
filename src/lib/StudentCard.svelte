@@ -9,8 +9,10 @@
     saveLastStudent,
   } from "$lib/api.js";
 
-  /** Renders a matched student + their schedule. */
+  /** Renders a matched student (or bookable space) + their schedule. */
   let { student, updated } = $props();
+
+  const isSpace = $derived(student.kind === "space");
 
   const now = new Date();
   const nowKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
@@ -126,8 +128,10 @@
   function durationLabel(start, end) {
     const s = minutesOf(start);
     const e = minutesOf(end);
-    if (s == null || e == null || e <= s) return "break";
-    return `${spanLabel(e - s)} break`;
+    if (s == null || e == null || e <= s) return isSpace ? "free" : "break";
+    // Gaps between classes are breaks on a student card but free time on a
+    // space card ("free for 1hr 5min" answers "when is the room free?").
+    return isSpace ? `free for ${spanLabel(e - s)}` : `${spanLabel(e - s)} break`;
   }
 
   function prevDay() {
@@ -142,36 +146,53 @@
 <article
   class="overflow-hidden rounded-2xl border border-line bg-white shadow-sm"
 >
-  <button
-    type="button"
-    onclick={() => (groupsOpen = !groupsOpen)}
-    aria-expanded={groupsOpen}
-    aria-controls="groups-section"
-    class="flex w-full items-center justify-between gap-3 border-b border-line px-6 py-4 text-left"
-  >
-    <span class="font-serif text-2xl text-ink-900">{student.name}</span>
-    <span class="flex shrink-0 items-center gap-2">
-      <span
-        class="rounded-full border border-line bg-cream-100 px-3 py-1 text-sm font-medium text-ink-500"
-      >
-        Year {student.year}
+  {#if isSpace}
+    <!-- Spaces have no groups: static header, "Space" chip, not expandable. -->
+    <div
+      class="flex w-full items-center justify-between gap-3 border-b border-line px-6 py-4"
+    >
+      <span class="font-serif text-2xl text-ink-900">{student.name}</span>
+      <span class="flex shrink-0 items-center gap-2">
+        <span
+          class="rounded-full border border-line bg-cream-100 px-3 py-1 text-sm font-medium text-ink-500"
+        >
+          Space
+        </span>
       </span>
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        aria-hidden="true"
-        class="h-5 w-5 cursor-pointer text-ink-400 transition-transform duration-200"
-        class:rotate-180={groupsOpen}
-      >
-        <path d="m6 9 6 6 6-6" />
-      </svg>
-    </span>
-  </button>
+    </div>
+  {:else}
+    <button
+      type="button"
+      onclick={() => (groupsOpen = !groupsOpen)}
+      aria-expanded={groupsOpen}
+      aria-controls="groups-section"
+      class="flex w-full items-center justify-between gap-3 border-b border-line px-6 py-4 text-left"
+    >
+      <span class="font-serif text-2xl text-ink-900">{student.name}</span>
+      <span class="flex shrink-0 items-center gap-2">
+        <span
+          class="rounded-full border border-line bg-cream-100 px-3 py-1 text-sm font-medium text-ink-500"
+        >
+          Year {student.year}
+        </span>
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+          class="h-5 w-5 cursor-pointer text-ink-400 transition-transform duration-200"
+          class:rotate-180={groupsOpen}
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </span>
+    </button>
+  {/if}
 
+  {#if !isSpace}
   <div
     id="groups-section"
     class="grid transition-[grid-template-rows] duration-300 ease-in-out"
@@ -201,6 +222,7 @@
       </div>
     </div>
   </div>
+  {/if}
 
   <section aria-label="Class schedule">
     <div class="flex items-center justify-center py-2">
