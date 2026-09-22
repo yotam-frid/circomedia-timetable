@@ -10,7 +10,7 @@ sheet-content fingerprint still matches.
 # Bump this version whenever pipeline processing changes, in order to
 # invalidate the cache: entries written under another version stop
 # matching and are recomputed on the next run.
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 
 import hashlib
 import json

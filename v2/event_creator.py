@@ -169,9 +169,12 @@ def _target_matches_student(target, subject, student_groups_for_subject, student
     m = re.match(r"(.+?)\s*\((.+?),\s*(?:Year\s+)?(\d)\)", target)
     if m:
         group = m.group(1).strip()
-        # "All" means all students in this year for this subject
+        # "All" means all students in this year for this subject. A student
+        # must actually hold at least one group for the subject (a wholeton
+        # subject like Aerial is not every Year-2 student; Martha has no
+        # Aerial group and v1 never grants her the block).
         if group.lower() == "all":
-            return True
+            return bool(student_groups_for_subject)
         # Check if student has this group for this subject (year-blind).
         # Support compound group names like "Major + Minor":
         # a student in "Major" or "Minor" should match.

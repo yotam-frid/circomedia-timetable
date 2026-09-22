@@ -482,10 +482,11 @@ def _fix_classification(block, cls, groups_by_subject_year):
             subject = "Context 3"
             # If target is student_match, try to find the right group
             if target == "student_match":
-                # Check for year marker
+                # Check for year marker (the key is an int year; do not
+                # str()-wrap it or the check never fires — 3 != '3').
                 cy = block.get("color_year")
-                if cy and str(cy) in groups_by_subject_year.get("Context 3", {}):
-                    groups = groups_by_subject_year["Context 3"][str(cy)]
+                if cy and cy in groups_by_subject_year.get("Context 3", {}):
+                    groups = groups_by_subject_year["Context 3"][cy]
                     if groups:
                         target = f"{groups[0]} (Context 3, {cy})"
 
