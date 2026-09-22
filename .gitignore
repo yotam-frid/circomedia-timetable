@@ -17,3 +17,5 @@ node_modules/
 .svelte-kit/
 build/
 v2/.cache/
+.openchamber/
+.opencode/
