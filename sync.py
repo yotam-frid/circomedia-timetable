@@ -3,21 +3,20 @@
 
 Runs locally on the Mac (SharePoint login only works here). Pipeline:
   1. fetch_sharepoint_timetable.py --all --headless  (download all weeks)
-  2. hash incoming xlsx; if unchanged since last build, exit
-  3. build_feeds.py -> site/ (per-student feeds + roster + manifest)
-  4. publish.py -> Vercel Blob (only changed files; live in seconds)
+  2. build_feeds_v2.py                               (incremental v2 pipeline)
+  3. publish.py                                      -> Vercel Blob (only-changed)
 
 No site redeploy is needed for data changes; `vercel deploy` runs only when
 the SvelteKit app changes (src/, svelte.config.js, package.json).
 
 Usage:
   python3 sync.py                 # full run with schedule logic
-  python3 sync.py --force         # skip hash check
+  python3 sync.py --force         # skip schedule checks, force rebuild
   python3 sync.py --no-fetch      # reuse existing incoming/
+  python3 sync.py --no-publish    # skip blob publish (build only)
 """
 
 import argparse
-import hashlib
 import json
 import subprocess
 import sys
@@ -33,18 +32,6 @@ LONDON = ZoneInfo("Europe/London")
 
 def london_now():
     return datetime.now(LONDON)
-
-
-def sha256(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 16), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def incoming_hashes():
-    return {p.name: sha256(p) for p in sorted(INCOMING.glob("*.xlsx"))}
 
 
 def run(cmd):
@@ -88,11 +75,9 @@ def should_run(state, force=False):
     last = None
     if state.get("last_run"):
         last = datetime.fromisoformat(state["last_run"])
-    if 7 <= now.hour < 22:
-        return True, "in window 07:00-22:00"
-    if last is None or now - last >= timedelta(hours=2):
-        return True, "overnight 2h cadence"
-    return False, f"overnight cooldown (last run {last.isoformat() if last else 'never'})"
+    if last is None or now - last >= timedelta(hours=6):
+        return True, "6h cooldown elapsed"
+    return False, f"cooldown (last run {last.isoformat() if last else 'never'})"
 
 
 def main():
@@ -128,20 +113,11 @@ def main():
             state["auth_notified"] = False
             save_state(state)
 
-    last_built = state.get("last_built_hashes") or {}
-    if not a.force and incoming_hashes() == last_built:
-        state["last_run"] = london_now().isoformat()
-        STATE.write_text(json.dumps(state, indent=2))
-        print("skip: no incoming xlsx changed since last build")
-        return
+    run([sys.executable, "build_feeds_v2.py"] + (["--force"] if a.force else []))
 
-    run([sys.executable, "build_feeds.py"])
-
-    # Reload state: build/publish steps don't write it, but keep fresh.
     state = load_state()
-    state["last_built_hashes"] = incoming_hashes()
     state["last_run"] = london_now().isoformat()
-    STATE.write_text(json.dumps(state, indent=2))
+    save_state(state)
 
     if not a.no_publish:
         run([sys.executable, "publish.py"])

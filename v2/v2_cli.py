@@ -22,6 +22,7 @@ from .event_creator import build_events
 from .feed_gen import generate_feeds
 from .spaces import build_space_events, generate_space_feeds
 from .jev_state import build_state
+from .weeks import weeks_from_filename
 
 GROUP_SHEET_RE = re.compile(r"(?:year\s*\d|core\s*skills)\s*group", re.I)
 DAY_SHEET_RE = re.compile(r"^(?:monday|tuesday|wednesday|thursday|friday)", re.I)
@@ -180,16 +181,7 @@ def process_file(path, weeks=None, out_dir=None, force=False, student=None):
     if weeks:
         weeks_to_cover = weeks
     else:
-        # Infer from filename.
-        m = re.search(r"weeks?\s*(\d+)", path.stem, re.I)
-        if m:
-            weeks_to_cover = [int(m.group(1))]
-        else:
-            m2 = re.search(r"(\d+)-(\d+)", path.stem)
-            if m2:
-                weeks_to_cover = list(range(int(m2.group(1)), int(m2.group(2)) + 1))
-            else:
-                weeks_to_cover = list(range(1, 37))
+        weeks_to_cover = weeks_from_filename(path)
     print(f"  Weeks to cover: {weeks_to_cover}")
 
     print("\nStep 3: Building events...")
