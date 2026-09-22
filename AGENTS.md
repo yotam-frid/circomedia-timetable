@@ -55,6 +55,7 @@ runs ONLY when `src/` / `svelte.config.js` / `package.json` change.
 | `site/` | Build output (gitignored): `feeds/*.ics`, `feeds/spaces/*.ics`, `roster.json`, `spaces.json`, `manifest.json` |
 | `.sync_state.json` | (gitignored) `last_built_hashes` + `published_hashes` — what makes sync/publish idempotent |
 | `docs/feed.ics` | DEAD. Old single-student GitHub Pages feed, fully deprecated. Do not revive |
+| `v2/` | Jev-based matcher reimplementation (see **v2 pipeline** below). Standalone, not wired into `build_feeds.py`; parity-gated against v1 |
 
 ## Vercel setup (already done, don't recreate)
 
@@ -113,6 +114,67 @@ the Vercel production build (or before deploying).
 Roster (`parse_roster`): union of raw year sheets, NO Core-Skills merge for attribution. Row5 is a true label only when **bold** (`Group 1`, `Major`, `All`, `Minors`); an unbolded row5 person-name is the column's **first member** iff verifiably a student elsewhere (`Billie`, `James`, `Bee`…),   otherwise a staff/apparatus descriptor granting nothing. Person names are NEVER group labels: day-identified columns take the weekday (`Monday` Clown, `Wednesday` Conditioning, `Wednesday + Friday` Manipulation), PAR takes its header number (`Group 1` / `Group 2`, displayed under subject `PAR`). Whole-cohort single-group subjects (`movement`/`context2`/`conditioning` in Year 2, `context3` in Year 3) are hidden from cards but still match events. Dash-form apparatus bookings (`X - Hoop`), `?` garble and week notes never mint students; dash-less annotations (`Charlie straps`) and `&` duets resolve to verified members (see lessons). Spelling variants merge by `roster_norm` (`farrah (minor)`→`farrah`); nicknames merge by `MERGE_MAP` (`pip`→`pipper`, `fin`→`finley`, `meg`→`megan`, `maddie`→`madeline`, `jj`→`jjangel` displayed `JJ Angel`); junk dropped. `lookup_merged` unions variant groups within the matched year. Slugs via `slugify`, collision-safe (`-2` suffix).
 
 ICS output: deterministic UIDs (`sha1(date|start|end|subject)@circomedia`), `SEQUENCE:0` always, `REFRESH-INTERVAL:PT30M`, Europe/London VTIMEZONE, **RFC 5545 line folding** (Google rejects unfolded lines; Apple doesn't care).
+
+## v2 pipeline (Jev-based matcher reimplementation)
+
+`v2/` rebuilds the xlsx → per-student events path from scratch. It is
+**standalone**: `build_feeds.py` still runs v1 (`timetable_to_ics.py`), and v2
+only earns a switchover by matching v1 event-for-event (see Parity). One
+architectural rule splits the pipeline: **parse deterministically, classify
+with Jev, allocate deterministically.**
+
+Deterministic (pure Python, no model):
+- `day_classify.extract_blocks` walks each day sheet into blocks
+  `{time, location, texts, colour, weekday}` — `_parse_time` keeps time ranges
+  in `_block_texts` (shared slots like `12.45 - 1.30 Joanna- Nicky 12.45 -
+  1.30 Kitty - Jonathan` must split per attendee; ranges are stripped only
+  for the Jev prompt), dashless sub-headers (`2.15 3.30`) roll forward from
+  the morning, legend colours resolve to years via `(theme, idx, tint)` tuples.
+- `group_parse.assemble` builds the roster + per-student groups (reuses v1
+  `parse_roster` + `MERGE_MAP`).
+- `event_creator.build_events` assigns every event (see below) — membership,
+  years, titles, 1-to-1 seeds: all deterministic.
+- `feed_gen` writes ICS.
+
+Jev is asked **only** to classify each block (`_classify_block`, one question
+batch per block, results cached in `v2/.cache/`):
+- **subject** — `choice` from the real subject list built off the data + `Not a class`
+- **target** — `choice` from the real group / colour / year options
+- **weeks** — one `noul` per week ("no marker = all weeks")
+
+Everything after classification is code. In particular the 1-to-1 resolver
+(`_resolve_student_match_batch`) does **not** call Jev: attendees are the
+deterministic name hits (aliases + `MERGE_MAP`), and blocks with no
+recoverable name yield no event (v1 parity — `11.45-12.00 - Joanna` is
+dropped by `_leading_dash_cell`, never guessed).
+
+`event_creator.build_events` mirrors v1's per-student OR semantics:
+- A block belongs to a student if named **or** colour-year + group match;
+- named blocks fall through to group/colour/day matching **only** when they
+  also carry an explicit group label or all-year target (`Aerial | Group C |
+  Eloise, Janine, Joe` grants Group C *and* Eloise; `_leading_dash_cell`
+  blocks and bare 1-to-1s grant nobody);
+- day-session guessing never applies to `student_match` targets;
+- event names use `_event_name` (time-stripped segments) and per-student
+  titles use `_event_name_for_student` — the v1 gate (own segment only when
+  exactly one mine + another dash-form segment, else whole block), so
+  `Creative Project` never leaks the team roster as a title.
+
+**Parity**: `OPENROUTER_API_KEY=$(grep -m1 '^OPENROUTER_API_KEY=' .env |
+cut -d= -f2-) python3 -m v2.compare_v1v2` runs v2 on weeks 1+2, parses the
+v1 feeds at `/tmp/{name}_v1.ics` (regenerate stale ones with
+`build_feed.py --name X --year N -o /tmp/{x}_v1.ics`), and diffs
+`(date, start.time(), normalize_subject(name))` after stripping ` (Group X)`
+suffixes and applying `_NAME_ALIASES`. **`exit=1` means discrepancies found,
+not a crash.** Reference: 2026-09-22 run → `270 v1 / 270 v2 / 0 discrepancies`
+across all 9 compared students (Yotam, Buddy, Hazel, Mia, Holly, Bee, Charlie,
+Joanna, Kitty). The Phase-2 print line should say `seeded deterministically`.
+
+Gotchas: never add an LLM call to event allocation (it was deliberately
+removed); `named_keys` must keep a seeded student out of the group loop or
+they get two events with different names; an all-year named block whose named
+student is in the same cohort is a known (rare, accepted) double-event edge
+case.
 
 ## Invariants (the pipeline depends on these)
 
