@@ -1,4 +1,4 @@
-"""Entry point: python -m v2.main [--year N] [xlsx_path ...]
+"""Entry point: python -m v2.main [--year N] [--nocache] [xlsx_path ...]
 
 Reads xlsx group sheets, classifies cells via Jev, and prints every
 student with their year and groups.
@@ -14,8 +14,10 @@ try:
 except ImportError:
     sys.exit("Need openpyxl: pip install openpyxl")
 
+from . import cache as sheet_cache
 from .jev_classify import classify_sheet
 from .group_parse import assemble
+from .jev_state import build_state
 
 YEAR_RE = re.compile(r"year\s*(\d)", re.I)
 GROUP_SHEET_RE = re.compile(r"(?:year\s*\d|core\s*skills)\s*group", re.I)
@@ -64,6 +66,7 @@ def process_file(path, year_filter=None):
     all_entries = []  # (student, year, info)
     core_entries = []  # (student, info) from Core Skills
     total_calls = 0
+    cached_sheets = 0
 
     for name in wb.sheetnames:
         if not _is_group_sheet(name):
@@ -74,21 +77,41 @@ def process_file(path, year_filter=None):
             continue
 
         ws = wb[name]
-        if is_cs:
-            print(f"  Processing '{name}'...")
-            classification = classify_sheet(ws, 0)
-            entries = assemble(ws, classification)
+
+        # Year filter applies before touching the cache.
+        if not is_cs and year_filter and year != year_filter:
+            continue
+
+        # Per-sheet cache, keyed by filename + sheet name.
+        entries = None
+        fingerprint = sheet_cache.fingerprint(build_state(ws, 0 if is_cs else year))
+        cached = sheet_cache.load(path.name, name, fingerprint=fingerprint)
+        if cached is not None:
+            entries = [tuple(e) for e in cached]
+            cached_sheets += 1
+            print(f"  Cached '{name}'")
+
+        if entries is None:
+            if is_cs:
+                print(f"  Processing '{name}'...")
+                classification = classify_sheet(ws, 0)
+                entries = assemble(ws, classification)
+                for student, info in entries:
+                    core_entries.append((student, info))
+            else:
+                print(f"  Processing '{name}' (Year {year})...")
+                classification = classify_sheet(ws, year)
+                entries = assemble(ws, classification, year=year)
+                for student, info in entries:
+                    all_entries.append((student, year, info))
+            total_calls += 2
+            sheet_cache.save(path.name, name, entries, fingerprint=fingerprint)
+        elif is_cs:
             for student, info in entries:
                 core_entries.append((student, info))
         else:
-            if year_filter and year != year_filter:
-                continue
-            print(f"  Processing '{name}' (Year {year})...")
-            classification = classify_sheet(ws, year)
-            entries = assemble(ws, classification, year=year)
             for student, info in entries:
                 all_entries.append((student, year, info))
-        total_calls += 2
 
     # Build per-student year map from year sheets.
     by_student = {}  # name -> {year: [info]}
@@ -131,7 +154,7 @@ def process_file(path, year_filter=None):
 
     total_students = len(by_student)
     print(f"\nTotal: {total_students} students")
-    print(f"Jev calls: {total_calls}")
+    print(f"Jev calls: {total_calls} ({cached_sheets} sheets from cache)")
     wb.close()
 
     return total_students, total_calls
@@ -142,7 +165,13 @@ def main():
     ap.add_argument("files", nargs="*", help="xlsx files (default: all in incoming/)")
     ap.add_argument("--year", type=int, choices=(1, 2, 3),
                     help="Only show students from this year")
+    ap.add_argument("--nocache", action="store_true",
+                    help="Ignore the per-sheet cache (use while iterating on the pipeline)")
     a = ap.parse_args()
+
+    if a.nocache:
+        sheet_cache.set_enabled(False)
+        print("Cache disabled (--nocache)")
 
     if a.files:
         paths = [Path(p) for p in a.files]

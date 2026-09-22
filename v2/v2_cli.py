@@ -1,12 +1,10 @@
 """CLI entry point for v2 event pipeline.
 
 Usage:
-    python -m v2.v2_cli [xlsx_path ...] [--weeks 3,4,5] [--out dir] [--force]
+    python -m v2.v2_cli [xlsx_path ...] [--weeks 3,4,5] [--out dir] [--nocache]
 """
 
 import argparse
-import hashlib
-import json
 import re
 import sys
 from pathlib import Path
@@ -16,17 +14,18 @@ try:
 except ImportError:
     sys.exit("Need openpyxl: pip install openpyxl")
 
+from . import cache as sheet_cache
 from .jev_classify import classify_sheet
 from .group_parse import assemble
 from .day_classify import classify_day_sheet, extract_blocks
 from .event_creator import build_events
 from .feed_gen import generate_feeds
 from .spaces import build_space_events, generate_space_feeds
+from .jev_state import build_state
 
 GROUP_SHEET_RE = re.compile(r"(?:year\s*\d|core\s*skills)\s*group", re.I)
 DAY_SHEET_RE = re.compile(r"^(?:monday|tuesday|wednesday|thursday|friday)", re.I)
 YEAR_RE = re.compile(r"year\s*(\d)", re.I)
-CACHE_DIR = Path(__file__).resolve().parent / ".cache"
 
 
 def _is_group_sheet(name):
@@ -42,53 +41,27 @@ def _year_from_name(name):
     return int(m.group(1)) if m else None
 
 
-def _cache_path(xlsx_path):
-    """Cache key based on file name + size + mtime."""
-    p = Path(xlsx_path)
-    stat = p.stat()
-    key = f"{p.name}_{stat.st_size}_{int(stat.st_mtime)}"
-    h = hashlib.md5(key.encode()).hexdigest()[:12]
-    return CACHE_DIR / f"groups_{h}.json"
-
-
-def _load_cache(xlsx_path):
-    """Load cached group data if available."""
-    cache_file = _cache_path(xlsx_path)
-    if cache_file.exists():
-        try:
-            return json.loads(cache_file.read_text())
-        except Exception:
-            pass
-    return None
-
-
-def _save_cache(xlsx_path, data):
-    """Save group data to cache."""
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache_file = _cache_path(xlsx_path)
-    cache_file.write_text(json.dumps(data, indent=2))
+def _cache_fingerprint(ws, year):
+    """Content fingerprint for a sheet: what Jev sees (values + merges + bold)."""
+    fp = sheet_cache.fingerprint(build_state(ws, year))
+    return fp
 
 
 def extract_groups_from_xlsx(wb, year_filter=None, force=False, xlsx_path=None):
     """Extract student-group relationships from group sheets.
 
-    Uses cache unless force=True.
+    Each group sheet's assembled entries are cached (keyed by xlsx
+    filename + sheet name, gated by cache.CACHE_VERSION) unless
+    force=True or cache is disabled via --nocache.
+
     Returns (groups_by_subject_year, students_by_year, student_group_data).
     """
-    # Try cache first.
-    if not force and xlsx_path:
-        cached = _load_cache(xlsx_path)
-        if cached:
-            print("  (using cached group data)")
-            return (
-                cached["groups_by_subject_year"],
-                {int(k): v for k, v in cached["students_by_year"].items()},
-                cached["student_group_data"],
-            )
+    xlsx_name = xlsx_path.name if xlsx_path else None
 
     all_entries = []
     core_entries = []
     total_calls = 0
+    cached_sheets = 0
 
     for name in wb.sheetnames:
         if not _is_group_sheet(name):
@@ -99,21 +72,44 @@ def extract_groups_from_xlsx(wb, year_filter=None, force=False, xlsx_path=None):
             continue
 
         ws = wb[name]
-        if is_cs:
-            print(f"  Classifying '{name}'...")
-            classification = classify_sheet(ws, 0)
-            entries = assemble(ws, classification)
+
+        # Year filter applies before touching the cache: a cached sheet
+        # from an unfiltered run must not leak into a filtered one.
+        if not is_cs and year_filter and year != year_filter:
+            continue
+
+        # Per-sheet cache: key = filename + sheet name, fingerprint =
+        # the Jev-visible state (values + merges + bold).
+        entries = None
+        cache_fp = _cache_fingerprint(ws, 0 if is_cs else year)
+        if not force:
+            cached = sheet_cache.load(xlsx_name, name, fingerprint=cache_fp)
+            if cached is not None:
+                entries = [tuple(e) for e in cached]
+                cached_sheets += 1
+                print(f"  Cached '{name}' ({len(entries)} students)")
+
+        if entries is None:
+            if is_cs:
+                print(f"  Classifying '{name}'...")
+                classification = classify_sheet(ws, 0)
+                entries = assemble(ws, classification)
+                for student, info in entries:
+                    core_entries.append((student, info))
+            else:
+                print(f"  Classifying '{name}' (Year {year})...")
+                classification = classify_sheet(ws, year)
+                entries = assemble(ws, classification, year=year)
+                for student, info in entries:
+                    all_entries.append((student, year, info))
+            total_calls += 2
+            sheet_cache.save(xlsx_name, name, entries, fingerprint=cache_fp)
+        elif is_cs:
             for student, info in entries:
                 core_entries.append((student, info))
         else:
-            if year_filter and year != year_filter:
-                continue
-            print(f"  Classifying '{name}' (Year {year})...")
-            classification = classify_sheet(ws, year)
-            entries = assemble(ws, classification, year=year)
             for student, info in entries:
                 all_entries.append((student, year, info))
-        total_calls += 2
 
     # Build per-student year map.
     by_student = {}
@@ -155,17 +151,8 @@ def extract_groups_from_xlsx(wb, year_filter=None, force=False, xlsx_path=None):
         for year, infos in year_map.items():
             student_group_data.setdefault(name_lower, []).extend(infos)
 
-    print(f"  Groups extracted: {total_calls} Jev calls")
-
-    # Cache.
-    if xlsx_path:
-        cache_data = {
-            "groups_by_subject_year": groups_by_subject_year,
-            "students_by_year": {str(k): v for k, v in students_by_year.items()},
-            "student_group_data": student_group_data,
-        }
-        _save_cache(xlsx_path, cache_data)
-        print(f"  (cached to {_cache_path(xlsx_path).name})")
+    print(f"  Groups extracted: {total_calls} Jev calls "
+          f"({cached_sheets} sheets from cache)")
 
     return groups_by_subject_year, students_by_year, student_group_data
 
@@ -208,7 +195,8 @@ def process_file(path, weeks=None, out_dir=None, force=False, student=None):
     print("\nStep 3: Building events...")
     all_events = build_events(
         day_sheets, groups_by_subject_year, students_by_year,
-        student_group_data, weeks_to_cover=weeks_to_cover, wb=wb)
+        student_group_data, weeks_to_cover=weeks_to_cover, wb=wb,
+        cache_name=path.name)
 
     # Print summary.
     total_events = sum(len(evts) for evts in all_events.values())
@@ -259,11 +247,17 @@ def main():
                     help="Comma-separated week numbers (e.g. 3,4,5)")
     ap.add_argument("--out", type=str, default=None,
                     help="Output directory for ICS files")
+    ap.add_argument("--nocache", action="store_true",
+                    help="Ignore the per-sheet cache (use while iterating on the pipeline)")
     ap.add_argument("--force", action="store_true",
-                    help="Force rebuild (ignore cache)")
+                    help="Persisted alias of --nocache")
     ap.add_argument("--student", type=str, default=None,
                     help="Show events for a specific student")
     a = ap.parse_args()
+
+    if a.nocache or a.force:
+        sheet_cache.set_enabled(False)
+        print("Cache disabled")
 
     if a.files:
         paths = [Path(p) for p in a.files]

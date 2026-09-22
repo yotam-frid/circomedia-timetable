@@ -16,3 +16,4 @@ Term * Old.xlsx
 node_modules/
 .svelte-kit/
 build/
+v2/.cache/

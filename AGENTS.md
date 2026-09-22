@@ -137,10 +137,20 @@ Deterministic (pure Python, no model):
 - `feed_gen` writes ICS.
 
 Jev is asked **only** to classify each block (`_classify_block`, one question
-batch per block, results cached in `v2/.cache/`):
+batch per block) and each group sheet (`classify_sheet`). Results are
+cached **per sheet** in `v2/.cache/` — keyed by xlsx filename + sheet name
+(`Term 1a Week 1 2026__Monday 14th.json`), with a content-fingerprint and a
+pipeline version (`CACHE_VERSION` in `v2/cache.py`, written into every
+entry). A sheet's cache entry is reused only when both the filename+sheet
+key matches **and** the version is current:
 - **subject** — `choice` from the real subject list built off the data + `Not a class`
 - **target** — `choice` from the real group / colour / year options
 - **weeks** — one `noul` per week ("no marker = all weeks")
+
+**When iterating on the pipeline, run `python3 -m v2.v2_cli --nocache`
+(`== --force`) so you never read a stale cached result; bump the
+`CACHE_VERSION` const in `v2/cache.py` when the work is finished** so the
+next regular run invalidates old entries for good.
 
 Everything after classification is code. In particular the 1-to-1 resolver
 (`_resolve_student_match_batch`) does **not** call Jev: attendees are the

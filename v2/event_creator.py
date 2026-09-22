@@ -358,7 +358,8 @@ def _resolve_student_match_batch(blocks_by_year, students_by_year, wb, seeds=Non
 
 
 def build_events(day_sheets, groups_by_subject_year, students_by_year,
-                 student_group_data, weeks_to_cover=None, wb=None):
+                 student_group_data, weeks_to_cover=None, wb=None,
+                 cache_name=None):
     """Build per-student events from classified day sheets.
 
     Parameters
@@ -370,6 +371,8 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
         From v2 group_parse.assemble().
     weeks_to_cover : list of int, optional
     wb : openpyxl workbook, for student_match resolution.
+    cache_name : str, optional
+        xlsx filename used to key the per-sheet classification cache.
 
     Returns
     -------
@@ -421,7 +424,8 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
     for sheet_name, ws in day_sheets:
         from .day_classify import classify_day_sheet
         classified = classify_day_sheet(ws, sheet_name, groups_by_subject_year,
-                                        weeks_to_cover, wb=wb, legend=legend)
+                                        weeks_to_cover, wb=wb, legend=legend,
+                                        cache_name=cache_name)
         weekday, _ = _day_from_sheetname(sheet_name)
 
         for cls in classified:

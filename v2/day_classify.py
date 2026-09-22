@@ -6,6 +6,7 @@ gets its own compact Jev call — no full-day state needed.
 """
 
 import re
+from . import cache as sheet_cache
 from .jev_client import jev_call
 
 
@@ -335,7 +336,7 @@ def _classify_block(block, day_name, groups_by_subject_year, target_opts,
 
 
 def classify_day_sheet(ws, sheet_name, groups_by_subject_year, weeks_in_file,
-                       wb=None, legend=None):
+                       wb=None, legend=None, cache_name=None):
     """Classify all blocks in a day sheet via Jev (one call per block).
 
     Parameters
@@ -350,6 +351,8 @@ def classify_day_sheet(ws, sheet_name, groups_by_subject_year, weeks_in_file,
         For parsing the colour legend from Monday sheet.
     legend : dict, optional
         Pre-parsed legend {fill_key: year}. Passed through to extract_blocks.
+    cache_name : str, optional
+        xlsx filename used to key the per-sheet classification cache.
 
     Returns
     -------
@@ -363,6 +366,20 @@ def classify_day_sheet(ws, sheet_name, groups_by_subject_year, weeks_in_file,
     blocks = extract_blocks(ws, wb=wb, legend=legend)
     if not blocks:
         return []
+
+    # Per-sheet cache: key = filename + sheet name, fingerprint = what
+    # classification depends on (blocks + group options + weeks in file).
+    fingerprint = sheet_cache.fingerprint(
+        blocks, groups_by_subject_year, weeks_in_file)
+
+    cached = sheet_cache.load(cache_name, sheet_name, fingerprint=fingerprint)
+    if cached is not None and len(cached) == len(blocks):
+        print(f"  Cached '{sheet_name}' ({len(cached)} blocks)")
+        return [
+            {"block": b, "subject": c["subject"], "target": c["target"],
+             "weeks": c["weeks"]}
+            for b, c in zip(blocks, cached)
+        ]
 
     target_opts = _build_target_options(groups_by_subject_year)
 
@@ -383,6 +400,10 @@ def classify_day_sheet(ws, sheet_name, groups_by_subject_year, weeks_in_file,
             "target": cls["target"],
             "weeks": cls["weeks"],
         })
+
+    sheet_cache.save(cache_name, sheet_name,
+                     [{k: v for k, v in r.items() if k != "block"} for r in results],
+                     fingerprint=fingerprint)
     return results
 
 
