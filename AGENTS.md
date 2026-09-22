@@ -89,7 +89,7 @@ Without `LOCAL_SITE_DIR`, dev reads Blob with the same 300s caches as prod. Code
 
 `v2/` rebuilds the xlsx → per-student events path from scratch. The architectural rule: **parse deterministically, classify with Jev, allocate deterministically.**
 
-**Jev** is an LLM-based decision API on OpenRouter (`~typesafe/jev-latest`). It is called **only** for classification — never for allocation. Two passes:
+**Jev** is a cheap AI-based decision & classification engine API on OpenRouter (`~typesafe/jev-latest`). It is called **only** for classification — never for allocation. Two passes:
 1. **Group sheets** (`jev_classify.classify_sheet`): classify each non-empty cell as discipline / group / student (noul questions), then resolve student candidates against the full roster list (choice questions).
 2. **Day sheets** (`day_classify.classify_day_sheet`): extract time blocks deterministically (`extract_blocks`), then classify each block for subject (choice from actual subjects + "Not a class"), target audience (choice from real groups/years + `student_match`), and per-week applicability (one noul per week in the file).
 
