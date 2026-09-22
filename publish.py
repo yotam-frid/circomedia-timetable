@@ -109,7 +109,7 @@ def main():
     roster = site / "roster.json"
     manifest = site / "manifest.json"
     if not roster.exists() or not manifest.exists():
-        sys.exit(f"run build_feeds.py first ({site} has no roster/manifest)")
+        sys.exit(f"run build_feeds_v2.py first ({site} has no roster/manifest)")
 
     # Student feeds, space feeds (feeds/spaces/*.ics), and the JSON indexes.
     # Pathnames mirror the site/ tree: feeds/<slug>.ics,
