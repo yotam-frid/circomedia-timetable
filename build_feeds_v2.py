@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Build per-student + per-space feeds from the v2 (Jev) pipeline — incrementally.
+"""Build per-student + per-space feeds from the Jev pipeline — incrementally.
 
-Rewires the build/publish path onto v2/ (event_creator.build_events,
-spaces.build_space_events, feed_gen.to_ics / spaces.to_space_ics). The old
-v1 scripts (build_feeds.py, timetable_to_ics.py) are kept but unused.
+The build/publish path uses event_creator.build_events,
+spaces.build_space_events, feed_gen.to_ics, and spaces.to_space_ics.
 
 Incremental model:
   - Only xlsx files in incoming/ whose content changed since the last build go
@@ -24,10 +23,9 @@ Writes (same layout the app + publish.py already expect):
   site/spaces.json
   site/manifest.json
 
-Roster identity comes from v2's group-sheet extraction (lowercased,
-MERGE_MAP-merged) with junk entries ('need X,', teachers, day names) dropped.
-Display names are title-cased (JJ Angel override); slugs = slugify(display)
-=> identical URLs to the old v1 output for unchanged names.
+Roster identity comes from v2's group-sheet extraction with junk entries
+('need X,', teachers, day names) dropped. Display names are title-cased with
+a JJ Angel override; slugs use deterministic URL-safe normalization.
 
 Usage:
   python3 build_feeds_v2.py [--incoming incoming] [--out site] [--force]
@@ -48,14 +46,14 @@ from v2.v2_cli import extract_groups_from_xlsx, _is_day_sheet
 from v2.event_creator import build_events
 from v2.group_parse import drop_junk
 from v2.spaces import build_space_events, make_space_uid
-from v2.feed_gen import to_ics, dedup_events, make_uid, _subject_key
+from v2.feed_gen import to_ics, dedup_events, slugify, _subject_key
 from v2.spaces import to_space_ics
 from v2.weeks import weeks_from_filename
 
-from timetable_to_ics import slugify, MERGE_MAP, DISPLAY_OVERRIDES
-
-# Extend display overrides for v2 keys (lowercased MERGE_MAP outputs)
-DISPLAY_OVERRIDES = {**DISPLAY_OVERRIDES, **{"jjangel": "JJ Angel"}}
+DISPLAY_OVERRIDES = {
+    "jj angel": "JJ Angel",
+    "jjangel": "JJ Angel",
+}
 
 LONDON = ZoneInfo("Europe/London")
 THIN_THRESHOLD = 8

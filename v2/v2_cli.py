@@ -314,7 +314,7 @@ def process_file(path, weeks=None, out_dir=None, force=False, student=None):
     # Same roster hygiene the production build applies (build_feeds_v2).
     # Skipping it here would change students_by_year, which feeds the
     # day-sheet cache fingerprint — every cached classification would miss
-    # and the parity run would pay a full Jev re-run.
+    # and the CLI would pay a full Jev re-run.
     from .group_parse import drop_junk
     students_by_year, student_group_data = drop_junk(students_by_year,
                                                       student_group_data)

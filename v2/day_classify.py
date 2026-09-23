@@ -138,7 +138,7 @@ def _parse_time(text):
 def _block_texts(ws, col, start_row, end_row, mm):
     """Collect all non-empty text cells in a block range.
 
-    Time ranges are KEPT: v1 recovers student names hidden inside
+    Time ranges are KEPT: student names may be hidden inside
     time-header cells ('12.45 - 1.30 Joanna- Nicky 12.45 - 1.30
     Kitty - Jonathan') — stripping the times erases the per-attendee
     split structure. Pure-time cells still count as headers, not texts.
@@ -232,7 +232,7 @@ def extract_blocks(ws, wb=None, legend=None):
                 if cy == "other":
                     cy = None  # BTEC/Diploma/hire — not a regular year.
                 # BTEC cohort blocks never match regular-year students by
-                # year or group (v1 invariant); tag them so build_events
+                # year or group; tag them so build_events
                 # can skip group-created events while 1-to-1 name matches
                 # still land (matching stays colour-blind).
                 if fill_key(_val_cell(ws, r, col, mm)) == ("rgb", BTEC_ORANGE):
@@ -660,7 +660,7 @@ def _fix_classification(block, cls, groups_by_subject_year):
     # Fix 7: an explicit "Group X" token in the block text is the block's
     # real group, and must not be lost to a Jev option list that lacked it
     # (the roster had no Group D, so Jev wrote 'Group C (Aerial, 1)' for a
-    # 'Group D' cell). v1 reads the group straight off the sheet — mirror
+    # 'Group D' cell). Read the group straight off the sheet — mirror
     # that deterministically. Skip PAR (Fix 6 owns those) and non-classes.
     gm = re.search(r"\bGroup\s+([0-9A-E])\b", " | ".join(texts), re.I)
     if gm and subject not in ("student_match", "Not a class", "Unknown", "PAR"):

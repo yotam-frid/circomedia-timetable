@@ -22,7 +22,7 @@ TERM_WEEK1_MONDAY = dt.date(2026, 9, 14)
 WHOLE_COHORT = {"teacher training"}
 
 # Labelled-session markers. "Group 1"/"Group A"/"PAR Group 2" texts make a
-# block strict (label matching only); their absence allows the v1 day-session
+# block strict (label matching only); their absence allows the unmarked day-session
 # rule (unmarked, same-colour, group-meets-that-weekday).
 _GROUP_MARK_RE = re.compile(r"\bgroup\s+(?:[0-9]|[a-e])\b", re.I)
 _PAR_MARK_RE = re.compile(r"\bpar\s+group\s+\d", re.I)
@@ -53,14 +53,13 @@ def week_monday(week_num):
 
 
 def _text_subject_key(texts):
-    """v1-parity subject key read off a block's own text.
+    """Subject key read off a block's own text.
 
-    Mirrors v1's ``norm_subject_key`` (timetable_to_ics.py:305): an
-    unmarked class session is identified by a keyword in its text
+    An unmarked class session is identified by a keyword in its text
     ('Acro minors | Ethan (& Lisa)' → 'acro'), while staff/appointment
     cells ('James | Rod', 'Tan - Jonathan') return None. Used to decide
     when an unnamed student_match/private block is really an unmarked
-    class session that v1's day-session rule would grant.
+    class session that the day-session rule should grant.
     """
     s = " | ".join(texts).lower()
     if "aerial conditioning" in s:
@@ -113,11 +112,11 @@ def _event_name(block):
 
     Event names are freeform — often a subject, but 'Joanna- Nicky' is
     also a valid event name. Jev knows about subjects but never chooses
-    names: the name comes from the block's own text (v1 parity), so e.g.
+    names: the name comes from the block's own text, so e.g.
     a block whose text says 'Dance' is named 'Dance', never a subject
     alias like 'Movement'.
     """
-    # v1 strips embedded time ranges per slot, so a cell like
+    # Embedded time ranges are stripped per slot, so a cell like
     # '10.35-10.50 Kitty' names the event 'Kitty' (never with the time).
     texts = block.get("texts", [])
     segs = _block_name_segments(texts) or texts
@@ -217,18 +216,18 @@ def _target_matches_student(target, subject, student_groups_for_subject, student
                             group_allowed=True):
     """Check if an event's target applies to this student.
 
-    Group matching is colour-blind (like v1): Core Skills groups are
+    Group matching is colour-blind: Core Skills groups are
     shared across years, so we check if the student has the matching
     group regardless of the year in the target. The year comes from
     the header cell colour and is unreliable for cross-year subjects.
 
     group_allowed gates EXPLICIT group-name matches (a student holding
-    'Group C' for the subject). v1 only trusts a group label when the
-    block text actually names it ('Group c'); an unmarked block ('Acro
-    Majors | Lisa & Ethan') is a day-session, not a group session, so
-    it must never grant by group name alone. Cohort targets ('All
-    Years', 'All Year N', 'All (subj, year)') are explicit audience
-    labels and always apply.
+    'Group C' for the subject). The allocator trusts a group label only
+    when the block text actually names it ('Group c'); an unmarked block
+    ('Acro Majors | Lisa & Ethan') is a day-session, not a group
+    session, so it must never grant by group name alone. Cohort targets
+    ('All Years', 'All Year N', 'All (subj, year)') are explicit
+    audience labels and always apply.
     """
     if target == "All Years":
         return True
@@ -244,11 +243,11 @@ def _target_matches_student(target, subject, student_groups_for_subject, student
         # "All" means all students in this year for this subject. A student
         # must actually hold at least one group for the subject (a wholeton
         # subject like Aerial is not every Year-2 student; Martha has no
-        # Aerial group and v1 never grants her the block).
+        # Aerial group and the allocator never grants her the block).
         if group.lower() == "all":
             return bool(student_groups_for_subject)
         # Explicit group names only match when the block text names the
-        # group (v1 parity): an unmarked cross-colour block whose Jev
+        # group: an unmarked cross-colour block whose Jev
         # target drifted to a group ('Major (Acro, 2)' on a Wed 'Acro
         # Majors' block) must not mint events for that group.
         if not group_allowed:
@@ -270,9 +269,9 @@ def _target_matches_student(target, subject, student_groups_for_subject, student
 
 def _leading_dash_cell(texts):
     """True when a segment is in the 'time - Name' layout ('11.45-12.00 -
-    Joanna', '10.55-11.10 -Kitty'). The pre-dash is empty, so v1 can never
-    recover a name from it and consequently never emits an event for these
-    Meeting Room slots. Kept as a deliberate parity quirk."""
+    Joanna', '10.55-11.10 -Kitty'). The pre-dash is empty, so no name can be
+    recovered from it and consequently never emits an event for these
+    Meeting Room slots. Kept as a deliberate allocation quirk."""
     for seg in _block_name_segments(texts):
         s = seg.strip()
         if s.startswith("-") or s.startswith("\u2013"):
@@ -283,7 +282,7 @@ def _leading_dash_cell(texts):
 def _block_name_segments(texts):
     """Split block texts into name-bearing segments.
 
-    v1 recovers names hidden inside time-header cells ('12.45 - 1.30
+    The parser recovers names hidden inside time-header cells ('12.45 - 1.30
     Joanna- Nicky 12.45 - 1.30 Kitty - Jonathan'), so a cell can hold
     several 1-to-1 segments. Splitting on embedded time ranges yields
     each attendee's own slot: ['Joanna- Nicky', 'Kitty - Jonathan'].
@@ -319,7 +318,7 @@ def _seg_hits_token(seg, token):
 def _block_names_student(texts, roster_tokens):
     """True if any block text explicitly names a roster student.
 
-    Mirrors v1's named-first branch: a block containing a real student's
+    Uses a named-first branch: a block containing a real student's
     name resolves to that student regardless of subject/target. Staff
     mentions, parenthesised credits ('Ethan (& Lisa)'), dash-form apparatus
     bookings and pure time headers never count. Names embedded in
@@ -337,8 +336,8 @@ def _block_names_student(texts, roster_tokens):
 def _block_student_hits(texts, student_tokens):
     """Which roster-verifiable students are deterministically named?
 
-    v1 matches names exactly with its candidate set (name + aliases) and
-    never via the LLM; seeds let a clearly-named block resolve without an
+    Names are matched exactly with the candidate set (name + aliases)
+    and never via the LLM; seeds let a clearly-named block resolve without an
     LLM round-trip (immune to classifier flakiness).
     """
     hits = []
@@ -365,10 +364,10 @@ def _student_tokens_by_key(students_by_year):
 
 
 def _event_name_for_student(block, s_key, student_tokens):
-    """Per-attendee event title (v1 parity for shared 1-to-1 slots).
+    """Per-attendee event title for shared 1-to-1 slots.
 
-    v1 only narrows the title to the student's own segment when the block
-    holds SEVERAL dash-form attendee segments ('Joanna- Nicky ... '
+    The title narrows to the student's own segment when the block holds
+    SEVERAL dash-form attendee segments ('Joanna- Nicky ... '
     'Kitty - Jonathan' → 'Joanna- Nicky' for Joanna, 'Kitty - Jonathan'
     for Kitty). An attendee-list text in an otherwise single-name block
     ('Theo, Corina, Silas, Yotam, JJ' inside a 'Creative Project' block)
@@ -389,7 +388,7 @@ def _event_name_for_student(block, s_key, student_tokens):
 
 
 def _day_session_matches(weekday, subject, cy, sy, days_by_subject):
-    """v1 day-session rule: an unmarked, same-year-coloured session on a day
+    """Day-session rule: an unmarked, same-year-coloured session on a day
     the student's group meets ('Acro | Lisa and Ethan'). Caller guarantees
     the block has no Group/PAR marker in its text and the colour gate passed.
     """
@@ -414,11 +413,11 @@ def _day_from_sheetname(name):
 def _resolve_student_match_batch(blocks_by_year, students_by_year, wb, seeds=None):
     """Map student_match blocks to their attendees, deterministically.
 
-    v1 attributes a 1-to-1 block ONLY by explicit roster name in the text —
+    A 1-to-1 block is attributed ONLY by explicit roster name in the text,
     never by inference. So the attendee list IS the seeded name hits
     (exact-name matching, nickname aliases via MERGE_MAP). Blocks without
-    any recoverable name yield no event, exactly like v1 ('11.45-12.00 -
-    Joanna' never lands because v1's pre-dash parse can't recover her).
+    any recoverable name yield no event ('11.45-12.00 - Joanna' never lands
+    because the pre-dash parse can't recover her).
 
     Parameters
     ----------
@@ -539,7 +538,7 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
             if other_fill and not named and not _has_explicit_audience(block["texts"]):
                 continue
 
-            # Named-first (v1 parity): any block naming a roster student is
+            # Named-first: any block naming a roster student is
             # that student's session — Creative Project teams, owner 1-to-1s
             # ('Charlie (Creative)'), named slots, duets — regardless of
             # subject or how Jev classified it. Attendees are seeded
@@ -549,9 +548,9 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
             is_student_match = (named or target == "student_match"
                                or owner_student not in (None, "none")
                                or is_private_lesson)
-            # v1 day-session parity for unnamed Jev student_match/private
+            # The day-session rule handles unnamed Jev student_match/private
             # blocks that carry a real subject key in their text ('Acro
-            # minors | Ethan (& Lisa)' → 'acro'). V1 grants these via the
+            # minors | Ethan (& Lisa)' → 'acro'). It grants these via the
             # unmarked day-session rule (skey + colour gate + group-meets-
             # weekday), never as 1-to-1 blocks. Staff/appointment cells
             # ('James | Rod', 'Tan - Jonathan') have no subject key, so
@@ -596,7 +595,7 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
                               if s in {n.lower() for n in students_by_year.get(y, [])}]
                     seeds[(y, idx)] = seeded
                     named_keys.update(seeded)
-                # v1 membership is per-student OR ('block belongs if ANY'):
+                # Membership is per-student OR ('block belongs if ANY'):
                 # a group block whose teacher row names a student ('Aerial |
                 # Group C | Eloise, Janine, Joe') grants the GROUP C members
                 # the session AND Eloise by name. So named blocks fall
@@ -605,7 +604,7 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
                 # labelled student_match with no real name yields nothing.
                 if not named:
                     continue
-                # v1 OR-membership: named blocks fall through ONLY when they
+                # OR-membership: named blocks fall through ONLY when they
                 # also carry an explicit group label or all-year cohort.
                 # A named 1-to-1 ('Charlie straps - Janine', a Meeting Room
                 # slot misread as a class) grants nobody else.
@@ -613,7 +612,7 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
                         or re.match(r"All Year \d", str(target))):
                     continue
 
-            # v1 drops 'time - Name' layouts (leading-dash cells): the
+            # Drop 'time - Name' layouts (leading-dash cells): the
             # pre-dash is empty so no attendee is recoverable and the slot
             # never becomes an event ('12.05-12.20 - Nem' @ Meeting Room
             # is Nem's 1-to-1, not a PAR group session, and stays silent).
@@ -674,7 +673,7 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
 
                 for s_key, subj_groups in student_subj_groups.items():
                     if s_key in named_keys:
-                        continue  # getting it by name (v1 named branch wins)
+                        continue  # getting it by name (named branch wins)
                     sy = student_year.get(s_key)
                     if sy is None:
                         continue
@@ -688,9 +687,9 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
                         continue
                     sl = subject.lower()
                     # Explicit group names only match when the block text
-                    # carries the group label (v1 parity). Cohort targets
+                    # carries the group label. Cohort targets
                     # ('All', 'All Year N') always apply; an unmarked block
-                    # falls through to the v1 day-session rule below.
+                    # falls through to the day-session rule below.
                     if _target_matches_student(target, subject, subj_groups.get(sl, set()), sy,
                                                group_allowed=marked):
                         by_student.setdefault(s_key, []).append(event)
@@ -700,7 +699,7 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
                     if sl in WHOLE_COHORT:
                         by_student.setdefault(s_key, []).append(event)
                         continue
-                    # v1 day-session: unmarked, same-colour session on a day
+                    # Day-session: unmarked, same-colour session on a day
                     # the student's group meets. Never on 1-to-1-resolved
                     # blocks (a named appointment is nobody else's lesson).
                     if not marked and target != "student_match" and _day_session_matches(
@@ -755,9 +754,9 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
                     for s_key in matched:
                         event = {
                             "date": event_date, "start": start, "end": end,
-                            # Shared 1-to-1 slots are titled per attendee
-                            # (v1 parity): 'Joanna- Nicky  Kitty - Jonathan'
-                            # becomes each student's own segment.
+                            # Shared 1-to-1 slots are titled per attendee:
+                            # 'Joanna- Nicky  Kitty - Jonathan' becomes each
+                            # student's own segment.
                             "name": _event_name_for_student(
                                 block, s_key, student_tokens),
                             "location": block["location"],

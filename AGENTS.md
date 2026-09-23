@@ -31,8 +31,7 @@ Feed paths are a manual compatibility invariant: never rename a known path or sl
 ## Key files and commands
 
 - `build_feeds_v2.py`: production incremental builder; `publish.py`: rsync publisher; `sync.py`: fetch → build → optional publish.
-- `v2/`: Jev classifier, deterministic roster parser, event allocator, feed writers, and parity tools.
-- `timetable_to_ics.py`: legacy v1 single-student CLI/parity reference. Production imports compatibility slug/display/merge data from it; v2 matching remains independent.
+- `v2/`: Jev classifier, deterministic roster parser, event allocator, feed writers, and caches.
 - `src/routes/api/student/+server.js`, `src/routes/feeds/*`, and `src/lib/server/blob.js`: search, feed proxying, and box/local-data access.
 - `deploy.sh`: builds adapter-node for the box and adapter-vercel for Vercel, then deploys both.
 
@@ -74,7 +73,7 @@ Jev uses the OpenRouter Decisions model `~typesafe/jev-latest`. A call sends str
 - **Day blocks:** For each block, ask subject, target audience, whether it is a real class, whether it has an owner, whether it is a 1-to-1 private lesson, canonical subject, and one `week N` applicability question per week in the file. Subject/target/owner options come from the parsed roster. (`v2/day_classify.py:297-443`)
 - **CLI-only filename weeks:** `v2.v2_cli` may ask which weeks a filename covers when `--weeks` is omitted. Production uses deterministic `v2.weeks.weeks_from_filename` instead. (`v2/v2_cli.py:32-86`)
 
-Jev fallbacks are deliberately small: a literal `Group D` overrides a misleading target; explicit audience/year text and the colour legend override vague answers; named blocks seed attendees from roster names/aliases; a false/missing real-class answer becomes `Not a class`; empty week answers mean all covered weeks. An unnamed `student_match` is allocated by the v1-parity day-session rule only when its own text contains a recognizable subject; booking/staff text without one stays silent. Network failures do not fall back to stale results. HTTP 408/409/425/429/500/502/503/504/529, URL errors, timeouts, and malformed JSON are retried up to six times with `5/15/30/60/120`-second waits.
+Jev fallbacks are deliberately small: a literal `Group D` overrides a misleading target; explicit audience/year text and the colour legend override vague answers; named blocks seed attendees from roster names/aliases; a false/missing real-class answer becomes `Not a class`; empty week answers mean all covered weeks. An unnamed `student_match` is allocated by the deterministic day-session rule only when its own text contains a recognizable subject; booking/staff text without one stays silent. Network failures do not fall back to stale results. HTTP 408/409/425/429/500/502/503/504/529, URL errors, timeouts, and malformed JSON are retried up to six times with `5/15/30/60/120`-second waits.
 
 ## Caches and builds
 
@@ -86,26 +85,20 @@ Production considers only `incoming/*.xlsx` names beginning with `term` and cont
 
 - Read the workbook’s colour legend, not raw RGB. Year-2 blue is a theme tint; BTEC, Diploma, hire-blue, and other “other” fills are not ordinary year colours.
 - `color_year=None` does not automatically mean “no audience.” An unnamed `other` block is skipped only when it also lacks explicit audience text such as `Group X`, `PAR Group X`, `Major`, `Minors`, `All`, or a year marker. Named blocks remain colour-blind where intended.
-- Literal group labels come from the sheet; Jev’s group choice is only a suggestion. Time parsing rolls hours below 8 forward; if an allocated event still has `end <= start`, v2 adds 12 hours to both values. Shared time-header cells retain embedded names for per-attendee titles.
+- Literal group labels come from the sheet; Jev’s group choice is only a suggestion. Time parsing rolls hours below 8 forward; if an allocated event still has `end <= start`, the allocator adds 12 hours to both values. Shared time-header cells retain embedded names for per-attendee titles.
 - The 1-to-1 resolver does not call Jev: it returns deterministic roster-name seeds. A `student_match` with no seed produces no private event.
 - Space feeds are occupancy feeds, not Jev-classified student feeds: `v2/spaces.py` emits extracted non-closed blocks for every week covered by the workbook and ignores `(wkN)` markers.
-- v2 has no `CONFLICT` detector. `CONFLICT` output belongs to the legacy v1 reference CLI, not the production builder.
 - `v2/day_classify.py` defines `_fix_classification` twice; the later definition shadows the earlier one. `CANONICAL_SUBJECT_MAP` is currently unused; returned choice keys are consumed directly.
-- Row-5, booking-cell, `_member_names`, `_merged_away`, and `block_times` are v1-parser history. The current v2 equivalents are the Jev cell questions, `group_parse`, and deterministic event rules.
 
 ## Validation
 
 ```sh
-python3 -m v2.compare_v1v2
+python3 build_feeds_v2.py
+python3 build_feeds_v2.py
+pnpm build
 ```
 
-The command uses `OPENROUTER_API_KEY` from the environment or `.env`, runs v2 for weeks 1+2, reads v1 references from `/tmp/{name}_v1.ics`, and compares date, start time, and normalized subject. Exit 1 means discrepancies, not a crash; location is not part of its comparison key. Generate a corresponding v1 slice with:
-
-```sh
-python3 timetable_to_ics.py "incoming/<workbook>.xlsx" --name <name> --year <n> -o /tmp/<name>_<week>_v1.ics
-```
-
-Combine or place the corresponding week slices at `/tmp/<name>_v1.ics` before running the comparator. A dated 2026-09-23 run reported `262 v1 / 262 v2 / 0 discrepancies` across nine students; treat that as historical, not a guarantee. For matcher changes, manually diff Yotam’s DTSTART/SUMMARY/LOCATION tuples, inspect advisory `THIN:` output, rebuild twice to confirm no normalized rewrites, and finish with `pnpm build`. `THIN` only covers student feeds rewritten in that run.
+Run the builder twice and compare normalized feed, roster, space, and manifest output to confirm the incremental cache is stable. For a fresh classification pass, use `python3 -m v2.v2_cli --nocache`; for matcher changes, manually diff Yotam’s DTSTART/SUMMARY/LOCATION tuples and inspect advisory `THIN:` output. `THIN` only covers student feeds rewritten in that run.
 
 ## Deployment and limitations
 

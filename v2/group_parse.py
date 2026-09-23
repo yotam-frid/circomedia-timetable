@@ -90,7 +90,7 @@ def _is_junk(answers, vr, vc):
 
 
 # Literal group-label cells, as written on the sheets. These are parseable
-# deterministically (v1 reads them straight off the cell); Jev's _group noul
+# deterministically from the cell; Jev's _group noul
 # still gates "is this a group cell at all", but the label itself must never
 # come from Jev's choice question, which has no Group D option and coerces
 # "Group D" to "group_c" (this exact bug once mapped the whole Year-1
@@ -435,7 +435,7 @@ def assemble(ws, classification, year=None):
                 # No labelled entry for this subject — keep unlabelled.
                 deduped.append((name, entry["info"]))
 
-    # Normalize subject names and PAR GROUP labels to match v1.
+    # Normalize subject names and PAR GROUP labels for the feed schema.
     for _, info in deduped:
         s = (info["subject"] or "").lower()
         if "pro tour" in s:
@@ -457,11 +457,10 @@ JUNK_ROSTER_RE = re.compile(
 def drop_junk(students_by_year, student_group_data):
     """Strip junk/teacher entries the group sheets picked up.
 
-    Lives here (not in the build script) because BOTH entry points must
-    apply it: the day-sheet cache fingerprint is derived from
-    students_by_year, so the production build and the parity harness
-    disagreeing about the roster silently invalidates every cached
-    classification and forces a full Jev re-run.
+    Lives here (not in the build script) because both the production build
+    and the v2 CLI must apply it: the day-sheet cache fingerprint is derived
+    from students_by_year, so disagreeing about the roster silently
+    invalidates every cached classification and forces a full Jev re-run.
     """
     import sys
     bad = {s for s in student_group_data

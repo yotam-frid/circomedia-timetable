@@ -10,6 +10,8 @@ import hashlib
 import re
 from pathlib import Path
 
+from .feed_gen import slugify
+
 
 SPACE_ALIASES = {
     "gym bay 1": "Gym",
@@ -249,7 +251,7 @@ def generate_space_feeds(space_events, output_dir):
             continue
 
         ics = to_space_ics(events, space_name)
-        slug = re.sub(r"[^a-z0-9]+", "-", space_name.lower()).strip("-")
+        slug = slugify(space_name)
         out_path = spaces_dir / f"{slug}.ics"
         out_path.write_text(ics)
         print(f"  {space_name} ({len(events)} events) -> feeds/spaces/{slug}.ics")

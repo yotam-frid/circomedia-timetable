@@ -40,6 +40,12 @@ def _subject_key(subject):
     return re.sub(r"[^a-z0-9]", "", subject.lower()) if subject else "unknown"
 
 
+def slugify(name):
+    """Normalize a display name for a public feed path."""
+    value = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
+    return value or "student"
+
+
 def _student_groups_key(student_data):
     """Build a set of (subject, group) tuples for a student from v2 group data."""
     keys = set()
@@ -199,7 +205,7 @@ def generate_feeds(all_events, students_by_year, student_group_data,
 
             # Write ICS.
             ics = to_ics(events, student)
-            slug = re.sub(r"[^a-z0-9]+", "-", s_key).strip("-")
+            slug = slugify(s_key)
             out_path = output_dir / f"{slug}.ics"
             out_path.write_text(ics)
             print(f"  {student} ({len(events)} events) -> {out_path.name}")
