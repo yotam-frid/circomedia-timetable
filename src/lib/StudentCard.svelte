@@ -156,7 +156,7 @@
         <span
           class="rounded-full border border-line bg-cream-100 px-3 py-1 text-sm font-medium text-ink-500"
         >
-          Space
+          Room
         </span>
       </span>
     </div>

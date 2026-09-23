@@ -60,7 +60,7 @@
 
   <section class="flex flex-1 flex-col mt-1">
     {#if result.status === "empty"}
-      <span class="max-w-sm mb-4">Enter your <b>first name</b> or a <b>space's name</b>.</span>
+      <span class="max-w-sm mb-4">Enter your <b>first name</b> or a <b>room</b>.</span>
     {/if}
     <StudentSearch {onresult} initialQuery={restoredQuery} />
 

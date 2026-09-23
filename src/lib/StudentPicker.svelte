@@ -15,7 +15,7 @@
         >
           <span class="text-lg font-medium text-ink-800 group-hover:text-coral-600">{m.name}</span>
           <span class="rounded-full border border-line bg-cream-100 px-2.5 py-1 text-xs font-medium text-ink-400">
-            {m.kind === "space" ? "Space" : `Year ${m.year}`}
+            {m.kind === "space" ? "Room" : `Year ${m.year}`}
           </span>
         </button>
       </li>
