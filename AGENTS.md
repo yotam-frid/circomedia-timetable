@@ -32,7 +32,7 @@ Feed paths are a manual compatibility invariant: never rename a known path or sl
 
 - `build_feeds_v2.py`: production incremental builder; `publish.py`: rsync publisher; `sync.py`: fetch → build → optional publish.
 - `v2/`: Jev classifier, deterministic roster parser, event allocator, feed writers, and parity tools.
-- `timetable_to_ics.py`: legacy v1 single-student CLI/parity reference. Production imports only compatibility slug/display helpers.
+- `timetable_to_ics.py`: legacy v1 single-student CLI/parity reference. Production imports compatibility slug/display/merge data from it; v2 matching remains independent.
 - `src/routes/api/student/+server.js`, `src/routes/feeds/*`, and `src/lib/server/blob.js`: search, feed proxying, and box/local-data access.
 - `deploy.sh`: builds adapter-node for the box and adapter-vercel for Vercel, then deploys both.
 
@@ -105,7 +105,7 @@ The command uses `OPENROUTER_API_KEY` from the environment or `.env`, runs v2 fo
 python3 timetable_to_ics.py "incoming/<workbook>.xlsx" --name <name> --year <n> -o /tmp/<name>_<week>_v1.ics
 ```
 
-A dated 2026-09-23 run reported `262 v1 / 262 v2 / 0 discrepancies` across nine students; treat that as historical, not a guarantee. For matcher changes, manually diff Yotam’s DTSTART/SUMMARY/LOCATION tuples, inspect advisory `THIN:` output, rebuild twice to confirm no normalized rewrites, and finish with `pnpm build`. `THIN` only covers student feeds rewritten in that run.
+Combine or place the corresponding week slices at `/tmp/<name>_v1.ics` before running the comparator. A dated 2026-09-23 run reported `262 v1 / 262 v2 / 0 discrepancies` across nine students; treat that as historical, not a guarantee. For matcher changes, manually diff Yotam’s DTSTART/SUMMARY/LOCATION tuples, inspect advisory `THIN:` output, rebuild twice to confirm no normalized rewrites, and finish with `pnpm build`. `THIN` only covers student feeds rewritten in that run.
 
 ## Deployment and limitations
 
