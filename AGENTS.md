@@ -5,7 +5,7 @@ Micro-app for Circomedia classmates: type your first name → see your groups + 
 ## Architecture (data flows Mac → Hetzner box; Vercel proxies the box, never the reverse)
 
 ```
-Mac (launchd, hourly; SharePoint login ONLY works here)
+Mac (launchd, every 6h; SharePoint login ONLY works here)
   fetch_sharepoint_timetable.py --all --headless → incoming/Term*.xlsx
   build_feeds_v2.py                              → site/{feeds/*.ics, feeds/spaces/*.ics, roster.json, spaces.json, manifest.json}
   publish.py                                     → rsync site/ → Hetzner box (content-addressed, only-changed)
@@ -31,7 +31,7 @@ No redeploy is ever needed for timetable changes. UI changes deploy via **`./dep
 | `build_feeds_v2.py` | **PRODUCTION** incremental v2 builder. Reads `incoming/`, writes `site/` via v2 pipeline. Only changed xlsx files are reclassified; per-file events cached in `site/.events/`. |
 | `publish.py` | Data publisher: **rsync** `site/` → `root@91.98.227.5:/srv/timetable/` with `-c` (content-addressed → unchanged runs transfer nothing) + `--delete` (prunes stale feeds). Prints an operations counter (files per run, tracked per month in `.sync_state.json`). |
 | `deploy.sh` | UI deployer: `ADAPTER=node pnpm build` (box bundle) + `pnpm build` (Vercel bundle), then ships in parallel — rsync `build/` → box + restart `timetable.service`, and `vercel deploy --prebuilt --prod --yes`. |
-| `sync.py` | Orchestrator: fetch → hash-check → build (v2) → publish (**opt-in**: requires `--publish`; the launchd job passes it). Runs hourly via launchd, gated by a 6h cooldown. |
+| `sync.py` | Orchestrator: fetch → hash-check → build (v2) → publish (**opt-in**: requires `--publish`; the launchd job passes it). Single OS-level timer: launchd `StartInterval` 21600s (6h) — no in-script schedule logic. |
 | `fetch_sharepoint_timetable.py` | Playwright scraper, persistent profile in `.sharepoint-browser-profile/`. |
 | `src/routes/api/student/+server.js` | JSON search over the box's `roster.json` + `spaces.json`. Statuses: match/picker/none/too-many/empty; entries carry kind: student|space (`kind` param disambiguates exact picks). Space matching ignores case+spacing (`southwing`→South Wing). Student carries `feed: {https, webcal, google}` built from request origin; spaces point at `feeds/spaces/`. |
 | `src/routes/api/meta/+server.js` | JSON freshness `{updated_at}` (newest of roster/manifest stamps); frontend formats via `formatUpdated()`. |

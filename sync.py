@@ -9,7 +9,7 @@ Runs locally on the Mac (SharePoint login only works here). Pipeline:
 Usage:
   python3 sync.py                 # build only; publish is opt-in
   python3 sync.py --publish       # also rsync changed feeds to the Hetzner box
-  python3 sync.py --force         # skip schedule checks, force rebuild
+  python3 sync.py --force         # force rebuild (ignore xlsx hashes)
   python3 sync.py --no-fetch      # reuse existing incoming/
 """
 
@@ -17,7 +17,7 @@ import argparse
 import json
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -65,32 +65,15 @@ def notify_auth_expired():
     )
 
 
-def should_run(state, force=False):
-    if force:
-        return True, "forced"
-    now = london_now()
-    last = None
-    if state.get("last_run"):
-        last = datetime.fromisoformat(state["last_run"])
-    if last is None or now - last >= timedelta(hours=6):
-        return True, "6h cooldown elapsed"
-    return False, f"cooldown (last run {last.isoformat() if last else 'never'})"
-
-
 def main():
     ap = argparse.ArgumentParser(description="Fetch + build + publish timetable feeds")
-    ap.add_argument("--force", action="store_true", help="skip schedule/hash checks")
+    ap.add_argument("--force", action="store_true", help="force rebuild (ignore xlsx hashes)")
     ap.add_argument("--no-fetch", action="store_true", help="skip SharePoint fetch")
     ap.add_argument("--publish", action="store_true",
                     help="rsync built feeds to the Hetzner box (opt-in; default is build-only)")
     a = ap.parse_args()
 
     state = load_state()
-
-    ok, why = should_run(state, force=a.force)
-    if not ok:
-        print(f"skip: {why}")
-        return
 
     if not a.no_fetch:
         fetch = [sys.executable, "fetch_sharepoint_timetable.py", "--all", "--headless"]
