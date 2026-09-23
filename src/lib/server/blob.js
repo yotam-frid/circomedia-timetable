@@ -2,17 +2,17 @@ import { env } from '$env/dynamic/private';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-// Public bucket — the base URL is not secret (objects are world-readable).
-// Env wins when set (Vercel production/preview); fallback keeps `npm run dev`
-// working with zero setup.
+// Public origin — the base URL is not secret (objects are world-readable).
+// Env wins when set (Vercel production/preview → the Hetzner box); fallback
+// keeps `npm run dev` working with zero setup against the box too.
 export const BLOB_BASE =
   env.BLOB_BASE_URL?.replace(/\/$/, '') ||
-  'https://aej7l7keofspndyy.public.blob.vercel-storage.com';
+  'https://circomedia.yotamfrid.dev';
 
-// Local-dev escape hatch: point at a build_feeds.py output dir and the server
-// reads roster/manifest/feeds from disk instead of the published Blob store,
-// with the caches below disabled. Production is untouched (env unset there).
-//   python3 build_feeds.py                  # refresh site/ from incoming/
+// Local-dev escape hatch: point at a build_feeds_v2.py output dir and the server
+// reads roster/manifest/feeds from disk instead of the published box, with the
+// caches below disabled. Production is untouched (env unset there).
+//   python3 build_feeds_v2.py               # refresh site/ from incoming/
 //   LOCAL_SITE_DIR=$PWD/site pnpm dev
 const SITE_DIR = env.LOCAL_SITE_DIR?.replace(/\/$/, '') || null;
 
@@ -20,7 +20,7 @@ export const ROSTER_TTL = SITE_DIR ? 0 : 300; // seconds; roster changes rarely
 
 const cache = new Map(); // key -> { expires, value }
 
-/** GET a path from the Blob store (or the local site/ dir).
+/** GET a path from the box (BLOB_BASE_URL) or the local site/ dir.
  *  Returns { status, etag, body }. */
 export async function blobGet(path, etag = null) {
   if (SITE_DIR) {

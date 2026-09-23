@@ -12,7 +12,7 @@ import { getRoster, getSpaces, feedUrls, spaceFeedUrls } from '$lib/server/blob.
  *  200 { status: "picker", matches: [{name,year?,slug,kind}] }// 2–12 hits
  *  200 { status: "none", query }                             // no hits
  *  200 { status: "too-many", query, count }                  // >12 hits
- *  502 { error }                                             // blob unreadable
+ *  502 { error }                                             // box unreadable
  *
  *  student = { name, slug, kind: "student", year, groups,
  *              feed: { https, webcal, google } }

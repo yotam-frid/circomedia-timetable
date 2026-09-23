@@ -3,7 +3,7 @@ import { getRoster, blobGet, SLUG_RE } from '$lib/server/blob.js';
 const CACHE = 'public, max-age=300';
 const CDN_CACHE = 'public, s-maxage=300, stale-while-revalidate=60';
 
-/** GET|HEAD /feeds/{slug}.ics — per-student calendar feed, proxied from Blob. */
+/** GET|HEAD /feeds/{slug}.ics — per-student calendar feed, proxied from the box. */
 export async function GET({ params, request }) {
   return serve(params, request);
 }

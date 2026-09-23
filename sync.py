@@ -4,16 +4,13 @@
 Runs locally on the Mac (SharePoint login only works here). Pipeline:
   1. fetch_sharepoint_timetable.py --all --headless  (download all weeks)
   2. build_feeds_v2.py                               (incremental v2 pipeline)
-  3. publish.py                                      -> Vercel Blob (only-changed)
-
-No site redeploy is needed for data changes; `vercel deploy` runs only when
-the SvelteKit app changes (src/, svelte.config.js, package.json).
+  3. publish.py                                      -> rsync site/ to the Hetzner box (opt-in)
 
 Usage:
-  python3 sync.py                 # full run with schedule logic
+  python3 sync.py                 # build only; publish is opt-in
+  python3 sync.py --publish       # also rsync changed feeds to the Hetzner box
   python3 sync.py --force         # skip schedule checks, force rebuild
   python3 sync.py --no-fetch      # reuse existing incoming/
-  python3 sync.py --no-publish    # skip blob publish (build only)
 """
 
 import argparse
@@ -84,7 +81,8 @@ def main():
     ap = argparse.ArgumentParser(description="Fetch + build + publish timetable feeds")
     ap.add_argument("--force", action="store_true", help="skip schedule/hash checks")
     ap.add_argument("--no-fetch", action="store_true", help="skip SharePoint fetch")
-    ap.add_argument("--no-publish", action="store_true", help="skip blob publish (build only)")
+    ap.add_argument("--publish", action="store_true",
+                    help="rsync built feeds to the Hetzner box (opt-in; default is build-only)")
     a = ap.parse_args()
 
     state = load_state()
@@ -119,7 +117,7 @@ def main():
     state["last_run"] = london_now().isoformat()
     save_state(state)
 
-    if not a.no_publish:
+    if a.publish:
         run([sys.executable, "publish.py"])
 
     print("done")

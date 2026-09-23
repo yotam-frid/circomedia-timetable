@@ -4,7 +4,7 @@ const CACHE = 'public, max-age=300';
 const CDN_CACHE = 'public, s-maxage=300, stale-while-revalidate=60';
 
 /** GET|HEAD /feeds/spaces/{slug}.ics — per-space calendar feed, proxied
- *  from Blob (feeds/spaces/<slug>.ics). Same caching as student feeds. */
+ *  from the box (feeds/spaces/<slug>.ics). Same caching as student feeds. */
 export async function GET({ params, request }) {
   return serve(params, request);
 }
