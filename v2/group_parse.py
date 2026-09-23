@@ -8,6 +8,8 @@ DAY_SHORT = {
     "thursday": "Thu", "friday": "Fri",
 }
 
+# Teacher names — used for stripping from segments in event_creator.
+# Kept for deterministic fallback; Jev handles teacher detection during classification.
 TEACHERS = {
     "lisa", "ethan", "jane", "chané", "aimee", "aimee bennett",
     "janine", "nicky", "joe", "joe palmer", "jonathan", "jono",
@@ -32,9 +34,14 @@ MERGE_MAP = {
     "deedee": "dee dee",
 }
 
-# Apparatus vocabulary — strip from cell values when extracting names.
-APPARATUS_TOKEN_RE = re.compile(
-    r"\b(?:hoop|rod|straps?|rope|trapeze|silks?|dance\s*trap)\b", re.I)
+# Thresholds for Jev noul answers
+TEACHER_THRESHOLD = 0.7  # Stricter to avoid false positives
+APPARATUS_THRESHOLD = 0.5
+JUNK_THRESHOLD = 0.5
+GROUP_LABEL_THRESHOLD = 0.5
+STUDENT_THRESHOLD = 0.5
+DISCIPLINE_THRESHOLD = 0.5
+GROUP_THRESHOLD = 0.5
 
 
 def _normalize_name(name):
@@ -67,6 +74,72 @@ def _cell_val(ws, r, c, merged):
     return str(v).strip() if v is not None else ""
 
 
+def _is_teacher(answers, vr, vc):
+    """Check if cell is classified as teacher."""
+    return answers.get(f"q_{vr}_{vc}_teacher", {}).get("noul", 0) > TEACHER_THRESHOLD
+
+
+def _is_apparatus(answers, vr, vc):
+    """Check if cell is classified as apparatus booking."""
+    return answers.get(f"q_{vr}_{vc}_apparatus", {}).get("noul", 0) > APPARATUS_THRESHOLD
+
+
+def _is_junk(answers, vr, vc):
+    """Check if cell is classified as junk."""
+    return answers.get(f"q_{vr}_{vc}_junk", {}).get("noul", 0) > JUNK_THRESHOLD
+
+
+# Literal group-label cells, as written on the sheets. These are parseable
+# deterministically (v1 reads them straight off the cell); Jev's _group noul
+# still gates "is this a group cell at all", but the label itself must never
+# come from Jev's choice question, which has no Group D option and coerces
+# "Group D" to "group_c" (this exact bug once mapped the whole Year-1
+# Group-D columns to Group C).
+GROUP_LABEL_RE = re.compile(
+    r"^(?P<grp>Group\s+[0-9A-E]|PAR\s+Group\s+\d+|Major|Minors|All)$", re.I
+)
+
+
+def _deterministic_group_label(val, year=None):
+    """Literal group label from a header cell, or None if not one.
+
+    Core Skills "Group 3" is the roster's Group C (cross-year identity);
+    the day sheets write "Group 3" and the roster canonical is "Group C".
+    """
+    if not val:
+        return None
+    m = GROUP_LABEL_RE.match(val.strip())
+    if not m:
+        return None
+    raw = m.group("grp").strip()
+    if raw.lower().startswith("group"):
+        token = raw.split()[-1]
+        if token.isdigit():
+            if year is None and token == "3":
+                return "Group C"
+            return f"Group {int(token)}"
+        return "Group " + token.upper()
+    if raw.lower().startswith("par"):
+        return "PAR Group " + raw.split()[-1]
+    return raw[:1].upper() + raw[1:]
+
+
+def _get_group_label(answers, vr, vc):
+    """Get explicit group label from Jev choice answer (for PAR GROUP, Major, Minors, etc.)."""
+    choice = answers.get(f"q_{vr}_{vc}_group_label", {}).get("choice", "none")
+    if choice == "none":
+        return None
+    # Map choice back to display label
+    label_map = {
+        "group_1": "Group 1", "group_2": "Group 2", "group_3": "Group C",
+        "group_a": "Group A", "group_b": "Group B", "group_c": "Group C",
+        "group_d": "Group D", "group_e": "Group E", "major": "Major",
+        "minors": "Minors", "all": "All",
+        "par_group_1": "PAR Group 1", "par_group_2": "PAR Group 2",
+    }
+    return label_map.get(choice)
+
+
 def assemble(ws, classification, year=None):
     """Build per-student group assignments from a classified sheet.
 
@@ -89,6 +162,8 @@ def assemble(ws, classification, year=None):
     # Start at row 4 (skipping row 3 discipline headers).  Skip any cell
     # that is also classified as discipline — that's a subject header, not
     # a group label (e.g. Year 3 "Acro" at row 3 has both flags).
+    # Use Jev _group noul to detect group-like cells, then use cell value.
+    # For explicit labels (PAR GROUP, Major, Minors), use Jev group_label choice.
     col_group = {}
     for col in range(2, max_col + 1):
         for r in range(4, 7):
@@ -97,11 +172,25 @@ def assemble(ws, classification, year=None):
             val = str(v).strip() if v is not None else ""
             if not val:
                 continue
-            if answers.get(f"q_{vr}_{vc}_group", {}).get("noul", 0) > 0.5:
-                # Skip if also classified as discipline (subject header).
-                if answers.get(f"q_{vr}_{vc}_discipline", {}).get("noul", 0) > 0.5:
-                    continue
-                col_group[col] = val
+            # Check Jev _group noul for group-like cells
+            is_group = answers.get(f"q_{vr}_{vc}_group", {}).get("noul", 0) > GROUP_THRESHOLD
+            is_discipline = answers.get(f"q_{vr}_{vc}_discipline", {}).get("noul", 0) > DISCIPLINE_THRESHOLD
+            if is_group and not is_discipline:
+                # Deterministic label first (exact tokens like 'Group D',
+                # 'Group 1', 'Major', 'PAR Group 1') — never trust Jev's
+                # coerced choice for these. Fall back to Jev only for
+                # ambiguous text (abbreviations, etc.).
+                deterministic_label = _deterministic_group_label(val, year)
+                if deterministic_label:
+                    col_group[col] = deterministic_label
+                else:
+                    # Try explicit label first (PAR GROUP, Major, Minors, etc.)
+                    explicit_label = _get_group_label(answers, vr, vc)
+                    if explicit_label:
+                        col_group[col] = explicit_label
+                    else:
+                        # Use cell value directly (e.g., day names like "Monday")
+                        col_group[col] = val
                 break
 
     # Pre-build column -> subject by walking rows and resolving merges.
@@ -117,7 +206,7 @@ def assemble(ws, classification, year=None):
             val = str(v).strip() if v is not None else ""
             if not val:
                 continue
-            if answers.get(f"q_{vr}_{vc}_discipline", {}).get("noul", 0) > 0.5:
+            if answers.get(f"q_{vr}_{vc}_discipline", {}).get("noul", 0) > DISCIPLINE_THRESHOLD:
                 col_subject[col] = val
                 break
         if col not in col_subject:
@@ -134,11 +223,12 @@ def assemble(ws, classification, year=None):
         vr, vc = merged.get((3, col), (3, col))
         v = ws.cell(row=vr, column=vc).value
         val = str(v).strip() if v is not None else ""
-        if val and answers.get(f"q_{vr}_{vc}_group", {}).get("noul", 0) > 0.5:
-            if re.search(r"(?i)^par\s+group", val):
-                col_group[col] = val
+        if val:
+            label = _get_group_label(answers, vr, vc)
+            if label and re.search(r"(?i)^par\s+group", label):
+                col_group[col] = label
                 if col not in col_subject:
-                    col_subject[col] = val
+                    col_subject[col] = label
 
     # Pre-build column -> days.
     col_days = {}
@@ -179,15 +269,22 @@ def assemble(ws, classification, year=None):
             val = str(v).strip() if v is not None else ""
             if not val:
                 continue
-            # Skip group labels, discipline headers, day names.
-            if answers.get(f"q_{vr}_{vc}_group", {}).get("noul", 0) > 0.5:
+            # Skip group labels, discipline headers, day names using Jev.
+            if answers.get(f"q_{vr}_{vc}_group", {}).get("noul", 0) > GROUP_THRESHOLD:
                 continue
-            if answers.get(f"q_{vr}_{vc}_discipline", {}).get("noul", 0) > 0.5:
+            if answers.get(f"q_{vr}_{vc}_discipline", {}).get("noul", 0) > DISCIPLINE_THRESHOLD:
                 continue
             if _extract_days(val):
                 continue
             # Skip dash-form apparatus bookings ("Name - Hoop", "Rose - Hoop TBC").
             if " - " in val:
+                continue
+            # Skip teacher/apparatus/junk using Jev
+            if _is_teacher(answers, vr, vc):
+                continue
+            if _is_apparatus(answers, vr, vc):
+                continue
+            if _is_junk(answers, vr, vc):
                 continue
             resolved = resolutions.get(f"res_{vr}_{vc}", val)
             base = re.sub(r"\s*\(.*?\)", "", resolved)
@@ -206,6 +303,13 @@ def assemble(ws, classification, year=None):
         group_label = col_group.get(col)
         days = col_days.get(col, [])
 
+        # Day-identified columns: no group label, use the day name.
+        # This must run BEFORE the tutor column skip, because Devising/
+        # Movement in Year 1 may have day indicators (e.g., "Fridays")
+        # instead of traditional group labels.
+        if not group_label and days:
+            group_label = days[0]
+
         # Skip tutor columns (Devising/Movement) with no group labels.
         # Movement is only a tutor column in Year 1; Year 2/3 Movement
         # is a real subject.
@@ -217,13 +321,9 @@ def assemble(ws, classification, year=None):
 
         # Skip unlabelled columns when labelled columns exist for this
         # subject (handles Context 1 Monday, etc.).
-        # Must run BEFORE the day-identified fix below.
+        # Must run AFTER the day-identified fix above.
         if not group_label and subject and subject in subjects_with_labels:
             continue
-
-        # Day-identified columns: no group label, use the day name.
-        if not group_label and days:
-            group_label = days[0]
 
         # Students: every cell classified as student in this column,
         # OR whose resolved base name matches a known student.
@@ -242,7 +342,7 @@ def assemble(ws, classification, year=None):
             if " - " in val:
                 continue
             resolved = resolutions.get(f"res_{vr}_{vc}", val)
-            is_student = answers.get(f"q_{vr}_{vc}_student", {}).get("noul", 0) > 0.5
+            is_student = answers.get(f"q_{vr}_{vc}_student", {}).get("noul", 0) > STUDENT_THRESHOLD
             # Extract base name(s) from complex cell values.
             # "Billie (minor) dance trap" → "billie" (strip parens + trailing),
             # "Lucy & Nem" → ["lucy", "nem"],
@@ -250,14 +350,18 @@ def assemble(ws, classification, year=None):
             # "Imogen H" → ["imogen h"] (keep multi-word names intact).
             if "&" in resolved:
                 base = re.sub(r"\s*\(.*?\)", "", resolved)
-                base = APPARATUS_TOKEN_RE.sub(" ", base)
+                # Use Jev apparatus detection instead of regex
+                if _is_apparatus(answers, vr, vc):
+                    continue
                 parts = [p.strip().lower() for p in base.split("&") if p.strip()]
             elif "(" in resolved:
                 # "Billie (minor) dance trap" → "Billie"
                 parts = [re.sub(r"\s*\(.*?\).*", "", resolved).strip().lower()]
             else:
-                cleaned = APPARATUS_TOKEN_RE.sub(" ", resolved).strip()
-                parts = [cleaned.lower()] if cleaned else []
+                # Use Jev apparatus detection instead of regex
+                if _is_apparatus(answers, vr, vc):
+                    continue
+                parts = [resolved.strip().lower()] if resolved.strip() else []
             if not is_student and use_known:
                 # Check if any part matches a known student (use first
                 # word for matching, to catch "Charlie straps" → "charlie").
@@ -274,18 +378,20 @@ def assemble(ws, classification, year=None):
                 if sname in seen_students:
                     continue
                 seen_students.add(sname)
-                # Apply nickname merges and filter out teachers.
+                # Apply nickname merges and filter out teachers using Jev.
                 norm_name = _normalize_name(sname)
                 base_name = re.sub(r"\s*\(.*?\)", "", norm_name).strip()
                 # Also strip trailing junk like "????" from names.
                 base_name = re.sub(r"[^a-z ].*", "", base_name).strip()
-                if norm_name in TEACHERS or base_name in TEACHERS:
+                # Note: Teacher filtering already done via Jev _is_teacher check above
+                # but keep as safety net for resolved names
+                if _is_teacher(answers, vr, vc):
                     continue
                 results.append((norm_name, {
-                "subject": subject or "Unknown",
-                "group": group_label or "",
-                "days": days,
-            }))
+                    "subject": subject or "Unknown",
+                    "group": group_label or "",
+                    "days": days,
+                }))
 
     # Deduplicate: merge entries for the same (subject, group) pair,
     # collecting their days.  Unlabelled columns contribute their days
@@ -342,3 +448,31 @@ def assemble(ws, classification, year=None):
             info["group"] = "Group 2"
 
     return deduped
+
+
+JUNK_ROSTER_RE = re.compile(
+    r"\bneed\b|monday|tuesday|wednesday|thursday|friday|\bwk\b|\?|,", re.I)
+
+
+def drop_junk(students_by_year, student_group_data):
+    """Strip junk/teacher entries the group sheets picked up.
+
+    Lives here (not in the build script) because BOTH entry points must
+    apply it: the day-sheet cache fingerprint is derived from
+    students_by_year, so the production build and the parity harness
+    disagreeing about the roster silently invalidates every cached
+    classification and forces a full Jev re-run.
+    """
+    import sys
+    bad = {s for s in student_group_data
+           if len(s) > 25 or JUNK_ROSTER_RE.search(s) or s in TEACHERS}
+    if bad:
+        for b in sorted(bad):
+            print(f"  drop junk roster '{b}'", file=sys.stderr)
+        students_by_year = {
+            y: [n for n in ns if n.lower() not in bad]
+            for y, ns in students_by_year.items()
+        }
+        students_by_year = {y: ns for y, ns in students_by_year.items() if ns}
+        student_group_data = {k: v for k, v in student_group_data.items() if k not in bad}
+    return students_by_year, student_group_data

@@ -22,11 +22,157 @@ from .event_creator import build_events
 from .feed_gen import generate_feeds
 from .spaces import build_space_events, generate_space_feeds
 from .jev_state import build_state
-from .weeks import weeks_from_filename
+from .jev_client import jev_call
 
-GROUP_SHEET_RE = re.compile(r"(?:year\s*\d|core\s*skills)\s*group", re.I)
+
 DAY_SHEET_RE = re.compile(r"^(?:monday|tuesday|wednesday|thursday|friday)", re.I)
-YEAR_RE = re.compile(r"year\s*(\d)", re.I)
+GROUP_SHEET_RE = re.compile(r"(?:year\s*\d|core\s*skills)\s*group", re.I)
+
+
+def classify_file_weeks(filename, force=False):
+    """Classify which weeks a timetable file covers using Jev.
+
+    Returns list of week numbers (e.g., [3, 4, 5]).
+    Cached per filename.
+    """
+    cache_fp = sheet_cache.fingerprint(filename)
+    cached = sheet_cache.load(filename, "__file_weeks__", fingerprint=cache_fp)
+    if cached is not None and not force:
+        print(f"  Cached file weeks: {cached}")
+        return cached
+
+    # Build week criteria dynamically (1-36 plus common ranges)
+    criteria = {str(i): f"Week {i}" for i in range(1, 37)}
+    # Add common range labels
+    for start in range(1, 36):
+        for end in range(start + 1, min(start + 5, 37)):
+            criteria[f"{start}-{end}"] = f"Weeks {start}-{end}"
+    criteria["all"] = "All weeks 1-36"
+
+    state = (
+        "CIRCOMEDIA TIMETABLE — File Week Classification\n\n"
+        "You are given a filename of a timetable xlsx file. "
+        "Determine which week numbers it covers.\n\n"
+        "Filename patterns:\n"
+        "- 'Term 1a Week 1 2026.xlsx' → Week 1\n"
+        "- 'Term 1a Weeks 3-5 2026.xlsx' → Weeks 3,4,5\n"
+        "- 'Term 1a Wk 2 2026.xlsx' → Week 2\n"
+        "- 'Term 1a 2026.xlsx' → All weeks\n"
+        "- 'Term 1a Weeks 1-36 2026.xlsx' → All weeks\n"
+    )
+
+    questions = {
+        "file_weeks": {
+            "type": "choice",
+            "instructions": f"What week numbers does this timetable file cover? Filename: '{filename}'",
+            "criteria": criteria,
+        }
+    }
+
+    answers = jev_call(state, questions)
+    choice = answers.get("file_weeks", {}).get("choice", "all")
+
+    # Parse choice into week list
+    if choice == "all":
+        weeks = list(range(1, 37))
+    elif "-" in choice:
+        start, end = map(int, choice.split("-"))
+        weeks = list(range(start, end + 1))
+    else:
+        weeks = [int(choice)]
+
+    sheet_cache.save(filename, "__file_weeks__", weeks, fingerprint=cache_fp)
+    print(f"  Classified file weeks: {weeks}")
+    return weeks
+
+
+def classify_sheet_metadata(sheet_name, force=False, xlsx_name=None):
+    """Classify sheet type, day name, and year using Jev.
+
+    Returns (sheet_type, day_name, sheet_year).
+    sheet_type: 'day', 'group', 'core', 'other'
+    day_name: 'monday'..'friday' or None
+    sheet_year: 1, 2, 3, 0 (core), or None
+    Cached per (xlsx_name, sheet_name).
+    """
+    # One cache FILE per sheet: the sheet name is the second cache argument,
+    # not glued onto the first. Folding it into the filename made
+    # Path(...).stem collapse every sheet in a workbook onto the same
+    # '__sheet-meta.json', so each sheet's answer overwrote the previous
+    # one and 10 of 11 metadata calls missed (and re-queried Jev) every run.
+    cache_sheet = f"__meta__{sheet_name}"
+    cache_key = xlsx_name or sheet_name
+    cache_fp = sheet_cache.fingerprint("sheet-meta", sheet_name)
+    cached = sheet_cache.load(cache_key, cache_sheet, fingerprint=cache_fp)
+    if cached is not None and not force:
+        print(f"    Cached sheet meta: {cached}")
+        return tuple(cached)
+
+    state = (
+        "CIRCOMEDIA TIMETABLE — Sheet Metadata Classification\n\n"
+        "You are given a sheet name from a timetable workbook. "
+        "Classify the sheet type and extract metadata.\n\n"
+        "Sheet types:\n"
+        "- 'day': Day sheet (Monday, Tuesday, Wednesday, Thursday, Friday)\n"
+        "- 'group': Group sheet (e.g., 'Year 1 Groups', 'Year 2 Groups', 'Year 3 Groups')\n"
+        "- 'core': Core Skills Groups sheet\n"
+        "- 'other': Other sheets (ignore)\n\n"
+        "Examples:\n"
+        "- 'Monday 14th' → day, monday\n"
+        "- 'Tuesday' → day, tuesday\n"
+        "- 'Year 1 Groups' → group, year=1\n"
+        "- 'Year 2 Groups' → group, year=2\n"
+        "- 'Year 3 Groups' → group, year=3\n"
+        "- 'Core Skills Groups' → core, year=0\n"
+        "- 'Sheet1' → other\n"
+    )
+
+    questions = {
+        "sheet_type": {
+            "type": "choice",
+            "instructions": f"What type of sheet is '{sheet_name}'?",
+            "criteria": {
+                "day": "Day sheet (Monday-Friday timetable)",
+                "group": "Group sheet (Year N Groups)",
+                "core": "Core Skills Groups",
+                "other": "Other/ignore"
+            }
+        },
+        "day_name": {
+            "type": "choice",
+            "instructions": f"If day sheet, which day of the week? Sheet: '{sheet_name}'",
+            "criteria": {
+                "monday": "Monday", "tuesday": "Tuesday", "wednesday": "Wednesday",
+                "thursday": "Thursday", "friday": "Friday", "none": "Not a day sheet"
+            }
+        },
+        "sheet_year": {
+            "type": "choice",
+            "instructions": f"If group sheet, which year cohort? Sheet: '{sheet_name}'",
+            "criteria": {
+                "1": "Year 1", "2": "Year 2", "3": "Year 3", "0": "Core Skills (cross-year)", "none": "Not a group sheet"
+            }
+        }
+    }
+
+    answers = jev_call(state, questions)
+
+    sheet_type = answers.get("sheet_type", {}).get("choice", "other")
+    day_name = answers.get("day_name", {}).get("choice", "none")
+    sheet_year = answers.get("sheet_year", {}).get("choice", "none")
+
+    # Normalize
+    if day_name == "none":
+        day_name = None
+    if sheet_year == "none":
+        sheet_year = None
+    else:
+        sheet_year = int(sheet_year)
+
+    result = (sheet_type, day_name, sheet_year)
+    sheet_cache.save(cache_key, cache_sheet, result, fingerprint=cache_fp)
+    print(f"    Classified sheet meta: {result}")
+    return result
 
 
 def _is_group_sheet(name):
@@ -35,11 +181,6 @@ def _is_group_sheet(name):
 
 def _is_day_sheet(name):
     return bool(DAY_SHEET_RE.search(name.strip().lower()))
-
-
-def _year_from_name(name):
-    m = YEAR_RE.search(name)
-    return int(m.group(1)) if m else None
 
 
 def _cache_fingerprint(ws, year):
@@ -65,10 +206,13 @@ def extract_groups_from_xlsx(wb, year_filter=None, force=False, xlsx_path=None):
     cached_sheets = 0
 
     for name in wb.sheetnames:
-        if not _is_group_sheet(name):
+        # Use Jev to classify sheet metadata
+        sheet_type, day_name, sheet_year = classify_sheet_metadata(name, force=force, xlsx_name=xlsx_name)
+
+        if sheet_type not in ("group", "core"):
             continue
-        year = _year_from_name(name)
-        is_cs = "core" in name.lower() and "skill" in name.lower()
+        year = sheet_year
+        is_cs = (sheet_type == "core")
         if year is None and not is_cs:
             continue
 
@@ -167,21 +311,29 @@ def process_file(path, weeks=None, out_dir=None, force=False, student=None):
     print("Step 1: Extracting student groups...")
     groups_by_subject_year, students_by_year, student_group_data = \
         extract_groups_from_xlsx(wb, force=force, xlsx_path=path)
+    # Same roster hygiene the production build applies (build_feeds_v2).
+    # Skipping it here would change students_by_year, which feeds the
+    # day-sheet cache fingerprint — every cached classification would miss
+    # and the parity run would pay a full Jev re-run.
+    from .group_parse import drop_junk
+    students_by_year, student_group_data = drop_junk(students_by_year,
+                                                      student_group_data)
 
     # Step 2: Classify day sheets and build events.
     print("\nStep 2: Classifying day sheets...")
     day_sheets = []
     for name in wb.sheetnames:
-        if _is_day_sheet(name):
+        sheet_type, day_name, sheet_year = classify_sheet_metadata(name, force=force, xlsx_name=path.name)
+        if sheet_type == "day" and day_name:
             ws = wb[name]
             day_sheets.append((name, ws))
-            print(f"  Found day sheet: {name!r}")
+            print(f"  Found day sheet: {name!r} -> {day_name}")
 
     # Determine which weeks to cover.
     if weeks:
         weeks_to_cover = weeks
     else:
-        weeks_to_cover = weeks_from_filename(path)
+        weeks_to_cover = classify_file_weeks(path.name, force=force)
     print(f"  Weeks to cover: {weeks_to_cover}")
 
     print("\nStep 3: Building events...")

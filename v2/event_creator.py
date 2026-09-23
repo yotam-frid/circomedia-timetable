@@ -26,7 +26,14 @@ WHOLE_COHORT = {"teacher training"}
 # rule (unmarked, same-colour, group-meets-that-weekday).
 _GROUP_MARK_RE = re.compile(r"\bgroup\s+(?:[0-9]|[a-e])\b", re.I)
 _PAR_MARK_RE = re.compile(r"\bpar\s+group\s+\d", re.I)
+_EXPLICIT_AUDIENCE_RE = re.compile(
+    r"\b(?:group\s+(?:[0-9]+|[a-e])|par\s+group\s+\d+|major|minors|"
+    r"all(?:\s+(?:years?|yr))?|y(?:ea)?rs?\s*[123])\b", re.I)
 _TEACHERS_BY_LEN = sorted(TEACHERS, key=len, reverse=True)
+
+
+def _has_explicit_audience(texts):
+    return bool(_EXPLICIT_AUDIENCE_RE.search(" | ".join(texts)))
 
 
 def _parse_weeks(week_nums, weeks_to_cover):
@@ -43,6 +50,62 @@ def _parse_weeks(week_nums, weeks_to_cover):
 def week_monday(week_num):
     """Monday date for a given week number. Week 1 = Sep 14, 2026."""
     return TERM_WEEK1_MONDAY + dt.timedelta(weeks=week_num - 1)
+
+
+def _text_subject_key(texts):
+    """v1-parity subject key read off a block's own text.
+
+    Mirrors v1's ``norm_subject_key`` (timetable_to_ics.py:305): an
+    unmarked class session is identified by a keyword in its text
+    ('Acro minors | Ethan (& Lisa)' → 'acro'), while staff/appointment
+    cells ('James | Rod', 'Tan - Jonathan') return None. Used to decide
+    when an unnamed student_match/private block is really an unmarked
+    class session that v1's day-session rule would grant.
+    """
+    s = " | ".join(texts).lower()
+    if "aerial conditioning" in s:
+        return "aerial_conditioning"
+    if "teacher training" in s:
+        return "teacher_training"
+    if "par group 1" in s:
+        return "par_group_1"
+    if "par group 2" in s:
+        return "par_group_2"
+    if "physical theatre" in s or "physical theater" in s \
+            or re.search(r"\bpt\b", s):
+        return "physical_theatre"
+    if "pro tour" in s:
+        return "context3"
+    if re.search(r"\bpar\b", s):
+        return "par"
+    if "core skill" in s:
+        return "core_skills"
+    if "stand up" in s or "standup" in s:
+        return "stand_up"
+    if "clown" in s:
+        return "clown"
+    m = re.search(r"context\s*([123])", s)
+    if m:
+        return f"context{m.group(1)}"
+    if "context" in s:
+        return "context1"
+    if "conditioning" in s:
+        return "conditioning"
+    if "acro" in s:
+        return "acro"
+    if "aerial" in s:
+        return "aerial"
+    if "manipulation" in s:
+        return "manipulation"
+    if "creative project" in s:
+        return "creative_project"
+    if "devising" in s:
+        return "devising"
+    if "movement" in s:
+        return "movement"
+    if "dance" in s:
+        return "dance"
+    return None
 
 
 def _event_name(block):
@@ -150,13 +213,22 @@ def _teachers(texts):
     return teachers
 
 
-def _target_matches_student(target, subject, student_groups_for_subject, student_year):
+def _target_matches_student(target, subject, student_groups_for_subject, student_year,
+                            group_allowed=True):
     """Check if an event's target applies to this student.
 
     Group matching is colour-blind (like v1): Core Skills groups are
     shared across years, so we check if the student has the matching
     group regardless of the year in the target. The year comes from
     the header cell colour and is unreliable for cross-year subjects.
+
+    group_allowed gates EXPLICIT group-name matches (a student holding
+    'Group C' for the subject). v1 only trusts a group label when the
+    block text actually names it ('Group c'); an unmarked block ('Acro
+    Majors | Lisa & Ethan') is a day-session, not a group session, so
+    it must never grant by group name alone. Cohort targets ('All
+    Years', 'All Year N', 'All (subj, year)') are explicit audience
+    labels and always apply.
     """
     if target == "All Years":
         return True
@@ -175,15 +247,21 @@ def _target_matches_student(target, subject, student_groups_for_subject, student
         # Aerial group and v1 never grants her the block).
         if group.lower() == "all":
             return bool(student_groups_for_subject)
+        # Explicit group names only match when the block text names the
+        # group (v1 parity): an unmarked cross-colour block whose Jev
+        # target drifted to a group ('Major (Acro, 2)' on a Wed 'Acro
+        # Majors' block) must not mint events for that group.
+        if not group_allowed:
+            return False
         # Check if student has this group for this subject (year-blind).
         # Support compound group names like "Major + Minor":
         # a student in "Major" or "Minor" should match.
-        if group in student_groups_for_subject:
+        if group.lower() in student_groups_for_subject:
             return True
         # Check if each part of a compound group name is in student's groups
         parts = re.split(r"\s*\+\s*", group)
         if len(parts) > 1:
-            return any(p in student_groups_for_subject for p in parts)
+            return any(p.lower() in student_groups_for_subject for p in parts)
         return False
 
     # Bare group name — no year context, can't match safely.
@@ -384,12 +462,12 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
     if weeks_to_cover is None:
         weeks_to_cover = list(range(1, 37))
 
-    # Build per-student group lookup: {student_lower: {subject_lower: set(groups)}}
+    # Build per-student group lookup: {student_lower: {subject_lower: set(groups_lower)}}
     student_subj_groups = {}
     for s_key, infos in student_group_data.items():
         for info in infos:
             subj = (info.get("subject") or "").lower()
-            grp = (info.get("group") or "").strip()
+            grp = (info.get("group") or "").strip().lower()
             if subj and grp:
                 student_subj_groups.setdefault(s_key, {}).setdefault(subj, set()).add(grp)
 
@@ -419,25 +497,47 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
         from .day_classify import parse_legend
         legend = parse_legend(wb)
 
+    # Build roster student list for owner_student criteria
+    roster_students = []
+    for year, names in students_by_year.items():
+        roster_students.extend(names)
+
     # Phase 1: Classify all sheets, collect non-student_match events and
     # group student_match blocks by year for batch resolution.
     student_match_by_year = {}  # {year: [(weekday, cls, block, subject), ...]}
     seeds = {}  # {(year, idx): [student_keys]} deterministic name matches
 
     for sheet_name, ws in day_sheets:
-        from .day_classify import classify_day_sheet
+        from .day_classify import classify_day_sheet, _merge_map, cell_year
         classified = classify_day_sheet(ws, sheet_name, groups_by_subject_year,
                                         weeks_to_cover, wb=wb, legend=legend,
-                                        cache_name=cache_name)
+                                        cache_name=cache_name, roster_students=roster_students)
         weekday, _ = _day_from_sheetname(sheet_name)
+        # "Other" header fills (red Manipulation 'Group B', hire-blue,
+        # Diploma pink, theme-5 staff slots) are read here rather than in
+        # extract_blocks on purpose: this signal only matters to allocation,
+        # so it must not change the block dict that the day-sheet cache
+        # fingerprint hashes (that would invalidate every cached
+        # classification and force a full Jev re-run for nothing).
+        mm = _merge_map(ws) if legend is not None else {}
 
         for cls in classified:
             block = cls["block"]
             subject = cls["subject"]
             target = cls["target"]
+            owner_student = cls.get("owner_student")
+            is_private_lesson = cls.get("is_private_lesson")
             named = _block_names_student(block["texts"], roster_tokens)
             marked = bool(_GROUP_MARK_RE.search("|".join(block["texts"]))
                           or _PAR_MARK_RE.search("|".join(block["texts"])))
+
+            other_fill = (
+                legend is not None
+                and cell_year(ws, block["start_row"], block["col"], mm,
+                              legend) == "other"
+            )
+            if other_fill and not named and not _has_explicit_audience(block["texts"]):
+                continue
 
             # Named-first (v1 parity): any block naming a roster student is
             # that student's session — Creative Project teams, owner 1-to-1s
@@ -446,10 +546,36 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
             # deterministically (name hits) so clearly-named blocks never
             # depend on classifier flakiness.
             named_keys = set()
-            if named or target == "student_match":
+            is_student_match = (named or target == "student_match"
+                               or owner_student not in (None, "none")
+                               or is_private_lesson)
+            # v1 day-session parity for unnamed Jev student_match/private
+            # blocks that carry a real subject key in their text ('Acro
+            # minors | Ethan (& Lisa)' → 'acro'). V1 grants these via the
+            # unmarked day-session rule (skey + colour gate + group-meets-
+            # weekday), never as 1-to-1 blocks. Staff/appointment cells
+            # ('James | Rod', 'Tan - Jonathan') have no subject key, so
+            # they stay silent. Neutralise the target to the bare subject
+            # so the day-session branch below ({target != "student_match"})
+            # can fire — seeding an empty student_match block would just
+            # drop it at {if not named: continue}. Only target exactly
+            # 'student_match' counts: group/all-year/whole-cohort targets
+            # are already wired to their own deterministic paths, and an
+            # explicitly marked block goes to group matching, not here.
+            text_key = _text_subject_key(block["texts"])
+            day_session_fallback = (not named and not marked
+                                    and text_key is not None
+                                    and target == "student_match")
+            if day_session_fallback:
+                is_student_match = False
+                target = subject
+            if is_student_match:
                 cy = block.get("color_year")
                 hits = (_block_student_hits(block["texts"], student_tokens)
                         if named else [])
+                # If owner_student is set, add that student to hits
+                if owner_student and owner_student not in (None, "none"):
+                    hits.append(owner_student.lower())
                 # Route to the colour's year AND every year whose roster
                 # actually contains a named attendee ('Dance | All Yr 1 |
                 # Charlie' seeds Year 3 for Charlie while colour=1 grants
@@ -491,7 +617,11 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
             # pre-dash is empty so no attendee is recoverable and the slot
             # never becomes an event ('12.05-12.20 - Nem' @ Meeting Room
             # is Nem's 1-to-1, not a PAR group session, and stays silent).
-            if _leading_dash_cell(block["texts"]):
+            # Jev's is_private_lesson handles this; if it's a private lesson
+            # but no owner_student, it's a leading-dash cell with no student.
+            is_private = cls.get("is_private_lesson", False)
+            owner_student = cls.get("owner_student")
+            if is_private and not owner_student and not day_session_fallback:
                 continue
 
             # Skip non-classes and unresolved subjects outright.
@@ -501,7 +631,9 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
             # under (or a whole-cohort subject like Teacher Training),
             # else nothing meaningful can match (and unguarded
             # 'All Years' targets would mint junk for everyone).
-            if subject not in groups_by_subject_year and subject.lower() not in WHOLE_COHORT:
+            # Match case-insensitively against groups_by_subject_year keys.
+            subject_key = next((k for k in groups_by_subject_year if k.lower() == subject.lower()), None)
+            if subject_key is None and subject.lower() not in WHOLE_COHORT:
                 continue
             # Core Skills runs Mon-Thu mornings only (cross-year groups).
             # A Friday Core Skills block is a classification hallucination.
@@ -537,6 +669,7 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
                     "subject": subject, "teachers": teachers,
                     "weeks": applicable_weeks, "week_num": week_num,
                     "target": target,
+                    "color_year": block.get("color_year"),
                 }
 
                 for s_key, subj_groups in student_subj_groups.items():
@@ -554,7 +687,12 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
                     if cy is not None and sy != cy and subject.lower() != "core skills":
                         continue
                     sl = subject.lower()
-                    if _target_matches_student(target, subject, subj_groups.get(sl, set()), sy):
+                    # Explicit group names only match when the block text
+                    # carries the group label (v1 parity). Cohort targets
+                    # ('All', 'All Year N') always apply; an unmarked block
+                    # falls through to the v1 day-session rule below.
+                    if _target_matches_student(target, subject, subj_groups.get(sl, set()), sy,
+                                               group_allowed=marked):
                         by_student.setdefault(s_key, []).append(event)
                         continue
                     # Whole-cohort subjects (Teacher Training) grant without

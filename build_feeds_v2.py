@@ -46,6 +46,7 @@ import openpyxl
 
 from v2.v2_cli import extract_groups_from_xlsx, _is_day_sheet
 from v2.event_creator import build_events
+from v2.group_parse import drop_junk
 from v2.spaces import build_space_events, make_space_uid
 from v2.feed_gen import to_ics, dedup_events, make_uid, _subject_key
 from v2.spaces import to_space_ics
@@ -58,7 +59,12 @@ DISPLAY_OVERRIDES = {**DISPLAY_OVERRIDES, **{"jjangel": "JJ Angel"}}
 
 LONDON = ZoneInfo("Europe/London")
 THIN_THRESHOLD = 8
-EVENTS_VERSION = 1
+# Per-file event cache version. This cache stores FINAL allocated events, so
+# it is only invalidated by the xlsx hash or this constant — NOT by changes
+# in day_classify/event_creator/group_parse logic. Bump it whenever allocation
+# logic changes, or stale events survive forever (that is how Yotam kept a
+# duplicate Conditioning until EVENTS_VERSION was bumped after Fix 7).
+EVENTS_VERSION = 3
 
 # Subjects hidden from card groups (whole-cohort single-group subjects)
 HIDE_SUBJECTS = {
@@ -91,23 +97,6 @@ SUBJECT_KEY = {
 
 DAY_FULL = {"mon": "Monday", "tue": "Tuesday", "wed": "Wednesday",
             "thu": "Thursday", "fri": "Friday"}
-
-JUNK_ROSTER_RE = re.compile(
-    r"\bneed\b|monday|tuesday|wednesday|thursday|friday|\bwk\b|\?|,", re.I)
-
-# Teacher names from v2 group_parse (kept in sync)
-TEACHERS = {
-    "lisa", "ethan", "jane", "chané", "aimee", "aimee bennett",
-    "janine", "nicky", "joe", "joe palmer", "jonathan", "jono",
-    "mark", "mark parfitt-jones", "parfitt-jones",
-    "george", "george fuller", "fuller", "owen",
-    "rachel", "rachel kirby", "kirby", "angie", "tony",
-    "jamie", "sorcha", "lewis", "lewis trump", "trump",
-    "rosy", "coralee", "maia", "heather", "heather parkin", "parkin",
-    "moira", "moira hunt", "hunt", "denis", "charlie white",
-    "tilly", "emily", "emily orme", "orme",
-}
-
 
 def sha256(path):
     h = hashlib.sha256()
@@ -161,21 +150,6 @@ def display_name(key):
     parts = [w[:1].upper() + w[1:] if w else w for w in key.split()]
     disp = " ".join(parts)
     return DISPLAY_OVERRIDES.get(key, disp)
-
-
-def drop_junk(students_by_year, student_group_data):
-    bad = {s for s in student_group_data
-           if len(s) > 25 or JUNK_ROSTER_RE.search(s) or s in TEACHERS}
-    if bad:
-        for b in sorted(bad):
-            print(f"  drop junk roster '{b}'", file=sys.stderr)
-        students_by_year = {
-            y: [n for n in ns if n.lower() not in bad]
-            for y, ns in students_by_year.items()
-        }
-        students_by_year = {y: ns for y, ns in students_by_year.items() if ns}
-        student_group_data = {k: v for k, v in student_group_data.items() if k not in bad}
-    return students_by_year, student_group_data
 
 
 def _sanitize_in(obj):

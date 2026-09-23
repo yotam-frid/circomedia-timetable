@@ -44,6 +44,45 @@ def _make_classify_questions(cells):
                 "false": "It is not a student name",
             },
         }
+        # Teacher detection
+        questions[f"{prefix}_teacher"] = {
+            "type": "noul",
+            "instructions": f"Is '{val}' a teacher/staff name (NOT a student)? Teachers appear in row 3 (subject row) or comma-lists like 'Lisa, Ethan, Chané'. Students in row 5+ are NOT teachers even if they share a name with a teacher.",
+            "criteria": {
+                "true": "It is a teacher name (staff, not student)",
+                "false": "It is not a teacher name (could be student, apparatus, etc.)",
+            },
+        }
+        # Apparatus detection
+        questions[f"{prefix}_apparatus"] = {
+            "type": "noul",
+            "instructions": f"Is '{val}' an apparatus booking? Looks like 'Name - Hoop', 'Name - Straps', 'Hoop TBC', 'Silks'. Contains apparatus words: Hoop, Rod, Straps, Rope, Trapeze, Silks, Dance Trap.",
+            "criteria": {
+                "true": "It is an apparatus booking",
+                "false": "It is not an apparatus booking",
+            },
+        }
+        # Junk detection
+        questions[f"{prefix}_junk"] = {
+            "type": "noul",
+            "instructions": f"Is '{val}' clearly NOT a student name? Junk includes ONLY: day names (Monday...), week markers '(wk3)', 'need X,' notes, '?', numbers only, empty strings. A person's name (even if also a teacher name) is NOT junk.",
+            "criteria": {
+                "true": "It is clearly junk (day name, week marker, note, number)",
+                "false": "It could be a student name (including names that might also be teachers)",
+            },
+        }
+        # Group label detection (choice for specific label)
+        questions[f"{prefix}_group_label"] = {
+            "type": "choice",
+            "instructions": f"Is '{val}' a group label? Examples: 'Group 1', 'Group A', 'Group C', 'Group D', 'Group 3', 'Major', 'Minors', 'PAR Group 1', 'PAR Group 2', 'All'. Not a subject, not a student name.",
+            "criteria": {
+                "group_1": "Group 1", "group_2": "Group 2", "group_3": "Group 3",
+                "group_a": "Group A", "group_b": "Group B",
+                "group_c": "Group C", "group_d": "Group D", "group_e": "Group E",
+                "major": "Major", "minors": "Minors", "all": "All",
+                "par_group_1": "PAR Group 1", "par_group_2": "PAR Group 2", "none": "Not a group label"
+            },
+        }
     return questions
 
 

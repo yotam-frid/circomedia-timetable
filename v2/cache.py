@@ -10,7 +10,10 @@ sheet-content fingerprint still matches.
 # Bump this version whenever pipeline processing changes, in order to
 # invalidate the cache: entries written under another version stop
 # matching and are recomputed on the next run.
-CACHE_VERSION = 2
+CACHE_VERSION = 3
+
+# Set to True to completely skip cache (for development/debugging)
+SKIP_CACHE = False
 
 import hashlib
 import json
@@ -43,6 +46,8 @@ def _path(xlsx_name: str, sheet_name: str) -> Path:
 
 def load(xlsx_name, sheet_name, fingerprint=None):
     """Cached data for a sheet, or None (disabled / missing / stale)."""
+    if SKIP_CACHE:
+        return None
     if not _enabled or not xlsx_name:
         return None
     path = _path(xlsx_name, sheet_name)
@@ -61,6 +66,8 @@ def load(xlsx_name, sheet_name, fingerprint=None):
 
 def save(xlsx_name, sheet_name, data, fingerprint=None):
     """Store a sheet result (no-op when caching is disabled)."""
+    if SKIP_CACHE:
+        return
     if not _enabled or not xlsx_name:
         return
     CACHE_DIR.mkdir(parents=True, exist_ok=True)

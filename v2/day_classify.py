@@ -266,14 +266,48 @@ def _build_target_options(groups_by_subject_year):
     return opts
 
 
+# Subject choices for canonical_subject question - use proper case to match group data
+CANONICAL_SUBJECTS = [
+    "Acro", "Aerial", "Aerial Conditioning", "Conditioning",
+    "Context 1", "Context 2", "Context 3", "Teacher Training",
+    "Core Skills", "Stand Up", "Clown", "PAR", "PAR Group 1", "PAR Group 2",
+    "Manipulation", "Physical Theatre", "Movement", "Devising", "Creative Project",
+    "Not a class"
+]
+
+# Map lowercase to proper case for subject normalization
+CANONICAL_SUBJECT_MAP = {
+    "acro": "Acro", "aerial": "Aerial", "aerial conditioning": "Aerial Conditioning",
+    "aerial_conditioning": "Aerial Conditioning", "conditioning": "Conditioning",
+    "context 1": "Context 1", "context_1": "Context 1", "context 2": "Context 2",
+    "context_2": "Context 2", "context 3": "Context 3", "context_3": "Context 3",
+    "teacher training": "Teacher Training", "teacher_training": "Teacher Training",
+    "core skills": "Core Skills", "core_skills": "Core Skills",
+    "stand up": "Stand Up", "stand_up": "Stand Up", "clown": "Clown",
+    "par": "PAR", "par group 1": "PAR Group 1", "par_group_1": "PAR Group 1",
+    "par group 2": "PAR Group 2", "par_group_2": "PAR Group 2",
+    "manipulation": "Manipulation", "physical theatre": "Physical Theatre",
+    "physical_theatre": "Physical Theatre", "movement": "Movement",
+    "devising": "Devising", "creative project": "Creative Project",
+    "creative_project": "Creative Project", "not a class": "Not a class",
+    "not_a_class": "Not a class",
+}
+
+
 def _classify_block(block, day_name, groups_by_subject_year, target_opts,
-                     weeks_in_file):
-    """Classify a single block via Jev. Returns {subject, target, weeks}."""
+                     weeks_in_file, roster_students=None):
+    """Classify a single block via Jev. Returns {subject, target, weeks, ...}."""
     content = "; ".join(TIME_RANGE_RE.sub("", t).strip() or t
                         for t in block["texts"])
 
     # Subject choices come from the actual data, not hardcoded lists.
     subject_opts = sorted(groups_by_subject_year.keys()) + ["Not a class"]
+
+    # Build owner student criteria from roster if available
+    owner_criteria = {"none": "No owner pattern"}
+    if roster_students:
+        for s in sorted(roster_students):
+            owner_criteria[s.lower()] = s
 
     state = (
         f"{DOMAIN_RULES}\n\n"
@@ -304,6 +338,57 @@ def _classify_block(block, day_name, groups_by_subject_year, target_opts,
             ),
             "criteria": {t: t for t in target_opts},
         },
+        "is_real_class": {
+            "type": "noul",
+            "instructions": (
+                f"Is this block a real timetabled class? "
+                f"Content: {content}. "
+                f"'Self led warm up', 'Registration', 'Site Closed', "
+                f"'First Aider duty', 'Student Training Ends', '///' are NOT classes. "
+                f"Blocks containing 'Core Skills', 'Aerial', 'Acro', 'Conditioning', "
+                f"'Movement', 'Dance', 'Clown', 'PAR', 'Physical Theatre', 'Manipulation', "
+                f"'Context', 'Creative Project', 'Teacher Training', 'Stand Up', 'Devising', "
+                f"'Pro Tour', 'Company meeting' ARE real classes even if they contain group labels."
+            ),
+            "criteria": {
+                "true": "Real class",
+                "false": "Not a class (helper text/break/closed)"
+            },
+        },
+        "owner_student": {
+            "type": "choice",
+            "instructions": (
+                f"Does this block have an owner pattern like 'Charlie (Creative)' "
+                f"or 'JJ Angel (Straps)'? If yes, who is the student? "
+                f"Content: {content}"
+            ),
+            "criteria": owner_criteria,
+        },
+        "is_private_lesson": {
+            "type": "noul",
+            "instructions": (
+                f"Is this a 1-to-1 private lesson? "
+                f"Looks like 'Charlie - Janine', 'Kitty - Jonathan' (student - teacher). "
+                f"'11.45-12.00 - Joanna' (leading dash, no student) is NOT a private lesson. "
+                f"Dash-form apparatus 'X - Hoop' is NOT a private lesson. "
+                f"Content: {content}"
+            ),
+            "criteria": {
+                "true": "Private lesson (student - teacher)",
+                "false": "Not a private lesson"
+            },
+        },
+        "canonical_subject": {
+            "type": "choice",
+            "instructions": (
+                f"What is the canonical subject for this block? "
+                f"Content: {content}. Location: {block['location']}. "
+                f"Owner patterns like 'Charlie (Creative)' mean Creative Project. "
+                f"'JJ Angel (Straps)' means Aerial. Apparatus in parens = session type. "
+                f"'Pro Tour' and 'Company meeting' mean Context 3."
+            ),
+            "criteria": {s: s.replace("_", " ").title() for s in CANONICAL_SUBJECTS},
+        },
     }
 
     # Weeks: one noul question per week in the file.
@@ -328,15 +413,83 @@ def _classify_block(block, day_name, groups_by_subject_year, target_opts,
     weeks = [w for w in weeks_in_file
              if answers.get(f"wk{w}", {}).get("noul", 0) > 0.5]
 
-    return {
-        "subject": answers.get("subject", {}).get("choice", "Unknown"),
-        "target": answers.get("target", {}).get("choice", "All Years"),
-        "weeks": weeks,  # empty list = all weeks (no marker found)
+    # Use canonical_subject if available, else fall back to subject
+    canonical_subj = answers.get("canonical_subject", {}).get("choice")
+    subject = canonical_subj if canonical_subj else answers.get("subject", {}).get("choice", "Unknown")
+
+    # If not a real class, force subject to Not a class
+    if answers.get("is_real_class", {}).get("noul", 0) < 0.5:
+        subject = "Not a class"
+
+    # Handle owner block
+    owner_student = answers.get("owner_student", {}).get("choice", "none")
+    if owner_student != "none":
+        target = "student_match"
+    else:
+        target = answers.get("target", {}).get("choice", "All Years")
+
+    # Handle private lesson
+    if answers.get("is_private_lesson", {}).get("noul", 0) > 0.5:
+        target = "student_match"
+
+    # Build cls dict for post-processing
+    cls = {
+        "subject": subject,
+        "target": target,
+        "weeks": weeks,
+        "owner_student": owner_student,
+        "is_private_lesson": answers.get("is_private_lesson", {}).get("noul", 0) > 0.5,
+        "canonical_subject": canonical_subj,
     }
+
+    # Post-process: fix common Jev misclassifications based on text patterns.
+    cls = _fix_classification(block, cls, groups_by_subject_year)
+
+    return cls
+
+
+def _fix_classification(block, subject, target, groups_by_subject_year):
+    """Post-process Jev classification to fix common misclassifications.
+
+    Checks block texts for patterns that Jev often misses:
+    - Pro Tour / Company meeting -> Context 3, target All Year 3
+    - Teacher Training -> target All Year N based on color_year
+    - Core Skills blocks with Year 3 color -> ensure Year 3 targets
+    """
+    import re
+    texts = block.get("texts", [])
+    joined = " ".join(texts).lower()
+    color_year = block.get("color_year")
+
+    # Fix 1: Pro Tour / Company meeting -> Context 3, target All Year 3
+    if subject == "Context 3" and ("pro tour" in joined or "company meeting" in joined):
+        target = "All Year 3"
+
+    # Fix 2: Teacher Training -> target All Year N based on color_year
+    if subject == "Teacher Training" and color_year:
+        target = f"All Year {color_year}"
+
+    # Fix 3: Core Skills blocks - if color_year is 3 (Year 3), ensure targets use Year 3 groups
+    if subject == "Core Skills" and color_year == 3:
+        # Jev often assigns Year 1 targets; remap to Year 3 equivalents
+        m = re.match(r"(.+?)\s*\((.+?),\s*(\d)\)", target)
+        if m:
+            group = m.group(1).strip()
+            target_subject = m.group(2).strip()
+            # Map Year 1 Core Skills groups to Year 3 equivalents
+            group_map = {
+                "Group 1": "Group C",
+                "Group 2": "Group C",  # Both map to Group C for Year 3
+                "Group C": "Group C",
+            }
+            if group in group_map:
+                target = f"{group_map[group]} (CORE SKILLS, 3)"
+
+    return subject, target
 
 
 def classify_day_sheet(ws, sheet_name, groups_by_subject_year, weeks_in_file,
-                       wb=None, legend=None, cache_name=None):
+                       wb=None, legend=None, cache_name=None, roster_students=None):
     """Classify all blocks in a day sheet via Jev (one call per block).
 
     Parameters
@@ -353,11 +506,13 @@ def classify_day_sheet(ws, sheet_name, groups_by_subject_year, weeks_in_file,
         Pre-parsed legend {fill_key: year}. Passed through to extract_blocks.
     cache_name : str, optional
         xlsx filename used to key the per-sheet classification cache.
+    roster_students : list of str, optional
+        Student names from roster for owner_student criteria.
 
     Returns
     -------
     list of dict
-        Each dict: {block, subject, target, weeks}
+        Each dict: {block, subject, target, weeks, owner_student, is_private_lesson, canonical_subject}
     """
     _, day_name = _day_from_sheetname(sheet_name)
     if not day_name:
@@ -368,25 +523,31 @@ def classify_day_sheet(ws, sheet_name, groups_by_subject_year, weeks_in_file,
         return []
 
     # Per-sheet cache: key = filename + sheet name, fingerprint = what
-    # classification depends on (blocks + group options + weeks in file).
-    fingerprint = sheet_cache.fingerprint(
-        blocks, groups_by_subject_year, weeks_in_file)
+    # classification depends on (blocks + group options + weeks in file + roster).
+    fp_data = (blocks, groups_by_subject_year, weeks_in_file, roster_students)
+    fingerprint = sheet_cache.fingerprint(fp_data)
 
     cached = sheet_cache.load(cache_name, sheet_name, fingerprint=fingerprint)
     if cached is not None and len(cached) == len(blocks):
         print(f"  Cached '{sheet_name}' ({len(cached)} blocks)")
-        return [
-            {"block": b, "subject": c["subject"], "target": c["target"],
-             "weeks": c["weeks"]}
+        results = [
+            {"block": b, **c}
             for b, c in zip(blocks, cached)
         ]
+        # Deterministic fixes must apply to cached classifications too —
+        # otherwise a stale-target cache entry (e.g. 'Group C (Aerial, 1)'
+        # written when the roster had no Group D) would survive forever.
+        # Fix 7 reads the explicit 'Group X' token straight off the text,
+        # so it never depends on Jev having had the group in its options.
+        return [_fix_classification(b, c, groups_by_subject_year)
+                for b, c in zip(blocks, results)]
 
     target_opts = _build_target_options(groups_by_subject_year)
 
     results = []
     for i, b in enumerate(blocks):
         cls = _classify_block(b, day_name, groups_by_subject_year, target_opts,
-                              weeks_in_file)
+                              weeks_in_file, roster_students)
 
         # Post-process: fix common Jev misclassifications based on text patterns.
         cls = _fix_classification(b, cls, groups_by_subject_year)
@@ -399,6 +560,9 @@ def classify_day_sheet(ws, sheet_name, groups_by_subject_year, weeks_in_file,
             "subject": cls["subject"],
             "target": cls["target"],
             "weeks": cls["weeks"],
+            "owner_student": cls.get("owner_student"),
+            "is_private_lesson": cls.get("is_private_lesson"),
+            "canonical_subject": cls.get("canonical_subject"),
         })
 
     sheet_cache.save(cache_name, sheet_name,
@@ -412,17 +576,26 @@ def _fix_classification(block, cls, groups_by_subject_year):
 
     Checks block texts for patterns that Jev often misses:
     - "All Yr N" / "All Nth years" → target should be "All Year N"
-    - Owner patterns like "Charlie (Creative)" → student_match
-    - "Pro Tour" → Context 3
-    - "Dance" / "Forro" / "Capoeira" with year markers
+    - "Pro Tour" / "Company meeting" → Context 3, target All Year 3
+    - Teacher Training → target All Year N based on color_year
+    - Core Skills blocks with Year 3 color → ensure Year 3 targets
     """
+    import re
     texts = block.get("texts", [])
     joined = " ".join(texts).lower()
     subject = cls["subject"]
     target = cls["target"]
+    color_year = block.get("color_year")
 
-    # Fix 1: "All Yr N" / "All Nth years" text → override target to "All Year N"
-    import re
+    # Fix 1: Pro Tour / Company meeting -> Context 3, target All Year 3
+    if subject == "Context 3" and ("pro tour" in joined or "company meeting" in joined):
+        target = "All Year 3"
+
+    # Fix 2: Teacher Training -> target All Year N based on color_year
+    if subject == "Teacher Training" and color_year:
+        target = f"All Year {color_year}"
+
+    # Fix 3: "All Yr N" / "All Nth years" text -> override target to "All Year N"
     m = re.search(r"All\s+(?:Yr|Year)\s+(\d)", " ".join(texts), re.I)
     if m:
         year_num = int(m.group(1))
@@ -433,14 +606,13 @@ def _fix_classification(block, cls, groups_by_subject_year):
             for t in texts:
                 tl = t.strip().lower()
                 if tl and "all" not in tl and "yr" not in tl and "year" not in tl:
-                    # Check if this is a known subject
                     for s in groups_by_subject_year:
                         if s.lower() in tl or tl in s.lower():
                             subject = s
                             break
                     break
 
-    # Fix 2: "All Nth years" pattern (e.g., "All 1st years", "All 2nd years")
+    # Fix 4: "All Nth years" pattern (e.g., "All 1st years", "All 2nd years")
     m = re.search(r"All\s+(\d)(?:st|nd|rd|th)\s+years", " ".join(texts), re.I)
     if m:
         year_num = int(m.group(1))
@@ -455,81 +627,55 @@ def _fix_classification(block, cls, groups_by_subject_year):
                             break
                     break
 
-    # Fix 3: Owner patterns like "Charlie (Creative)" → student_match
-    # These are 1-to-1 sessions with the owner's name in parentheses
-    OWNER_RE = re.compile(r"(\w+)\s*\((\w+(?:\s+\w+)*)\)")
-    for t in texts:
-        om = OWNER_RE.match(t.strip())
-        if om:
-            # This is an owner block like "Charlie (Creative)"
-            # The subject in parentheses is the session type
-            session_type = om.group(2).lower()
-            # Map to a known subject
-            creative_like = ["creative", "devising", "project"]
-            if any(cl in session_type for cl in creative_like):
-                for s in groups_by_subject_year:
-                    if any(cl in s.lower() for cl in creative_like):
-                        subject = s
-                        break
-            # Ensure target is student_match (1-to-1)
-            if target != "student_match":
-                target = "student_match"
-            break
-
-    # Fix 4: "Pro Tour" → Context 3
-    if "pro tour" in joined:
-        if "context 3" in [s.lower() for s in groups_by_subject_year]:
-            subject = "Context 3"
-            # If target is student_match, try to find the right group
-            if target == "student_match":
-                # Check for year marker (the key is an int year; do not
-                # str()-wrap it or the check never fires — 3 != '3').
-                cy = block.get("color_year")
-                if cy and cy in groups_by_subject_year.get("Context 3", {}):
-                    groups = groups_by_subject_year["Context 3"][cy]
-                    if groups:
-                        target = f"{groups[0]} (Context 3, {cy})"
-
-    # Fix 5: "Dance" / "Forro" / "Capoeira" with year marker
-    if any(w in joined for w in ["dance", "forro", "capoeira"]):
-        m = re.search(r"All\s+(?:Yr|Year)\s+(\d)", " ".join(texts), re.I)
+    # Fix 5: Core Skills blocks - only remap Year 3 groups (Group 3, Group C) to Year 3 target
+    if subject == "Core Skills":
+        m = re.match(r"(.+?)\s*\((.+?),\s*(\d)\)", target)
         if m:
-            year_num = int(m.group(1))
-            target = f"All Year {year_num}"
-            # Find the correct subject name — may be "Movement" in group data
-            for s in groups_by_subject_year:
-                sl = s.lower()
-                if any(w in sl for w in ["dance", "forro", "capoeira", "movement"]):
-                    subject = s
-                    break
+            group = m.group(1).strip()
+            # Only remap Year 3 groups (Group 3, Group C) to Year 3 target
+            if group in ("Group 3", "Group C"):
+                target = "Group C (CORE SKILLS, 3)"
+    # Fix 5b: Core Skills blocks with student_match target but Year 3 group indicators in text
+    if subject == "Core Skills" and target == "student_match":
+        # Check for Group 3 or Group C indicators in texts
+        for t in texts:
+            tl = t.strip().lower()
+            if "group 3" in tl or "group c" in tl:
+                target = "Group C (CORE SKILLS, 3)"
+                break
 
-    # Fix 5b: "Dance" / "Forro" / "Capoeira" without year marker but with color_year
-    if any(w in joined for w in ["dance", "forro", "capoeira"]) and target == "student_match":
-        cy = block.get("color_year")
-        if cy:
-            target = f"All Year {cy}"
-            for s in groups_by_subject_year:
-                sl = s.lower()
-                if any(w in sl for w in ["dance", "forro", "capoeira", "movement"]):
-                    subject = s
-                    break
+    # Fix 6: PAR blocks with student_match target but PAR group indicators in text
+    if subject == "PAR" and target == "student_match":
+        for t in texts:
+            tl = t.strip().lower()
+            if "par group 1" in tl or "par group 2" in tl or "par group 3" in tl or "par group" in tl:
+                import re
+                m = re.search(r"par group (\d)", tl)
+                if m:
+                    target = f"Group {m.group(1)} (PAR, {color_year or 3})"
+                else:
+                    target = f"Group 1 (PAR, {color_year or 3})"
+                break
 
-    # Fix 6: "Teacher Training" / "teacher training" → check for year cohort
-    if "teacher training" in joined:
-        cy = block.get("color_year")
-        if cy:
-            target = f"All Year {cy}"
-            subject = "Teacher Training"
-
-    # Fix 7: Target subject mismatch — e.g. "Major (Acro, 2)" for an Aerial block.
-    # Jev sometimes puts the wrong subject in the target parenthetical.
-    # If the target's subject doesn't match the block subject, fix it.
-    m = re.match(r"(.+?)\s*\((.+?),\s*(?:Year\s+)?(\d+)\)", target)
-    if m and subject != "student_match":
-        target_subject = m.group(2).strip()
-        if target_subject.lower() != subject.lower():
-            # Rebuild target with the correct subject
-            target = f"{m.group(1).strip()} ({subject}, {m.group(3)})"
+    # Fix 7: an explicit "Group X" token in the block text is the block's
+    # real group, and must not be lost to a Jev option list that lacked it
+    # (the roster had no Group D, so Jev wrote 'Group C (Aerial, 1)' for a
+    # 'Group D' cell). v1 reads the group straight off the sheet — mirror
+    # that deterministically. Skip PAR (Fix 6 owns those) and non-classes.
+    gm = re.search(r"\bGroup\s+([0-9A-E])\b", " | ".join(texts), re.I)
+    if gm and subject not in ("student_match", "Not a class", "Unknown", "PAR"):
+        grp = "Group " + gm.group(1).upper()
+        if subject == "Core Skills" and grp == "Group 3":
+            grp = "Group C"
+        # Resolve the year that subject+group belongs to; fall back to the
+        # block's colour year (group matching is colour-blind downstream,
+        # so the parens year is cosmetic for matching).
+        year = color_year or 1
+        for y, gs in groups_by_subject_year.get(subject, {}).items():
+            if grp in gs:
+                year = y
+                break
+        target = f"{grp} ({subject}, {year})"
 
     cls["subject"] = subject
     cls["target"] = target
