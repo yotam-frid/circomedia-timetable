@@ -14,9 +14,21 @@
 
   const isSpace = $derived(student.kind === "space");
 
-  const now = new Date();
-  const nowKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  let now = $state(new Date());
+  let nowKey = $derived(
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`,
+  );
+  let nowMinutes = $derived(now.getHours() * 60 + now.getMinutes());
+
+  $effect(() => {
+    let timeout;
+    const update = () => {
+      now = new Date();
+      timeout = setTimeout(update, 60_000 - (Date.now() % 60_000));
+    };
+    timeout = setTimeout(update, 60_000 - (Date.now() % 60_000));
+    return () => clearTimeout(timeout);
+  });
 
   let groupsOpen = $state(false);
 
