@@ -153,6 +153,13 @@ const WEEKDAY_SHORT = {
   sunday: 'Sun'
 };
 
+const GROUP_LABEL_PATTERN =
+  '(?:Group\\s+[0-9A-E]|PAR\\s+Group\\s+\\d+|Major|Minors|All|Mon|Tue|Tues|Wed|Thu|Thurs|Fri|Sat|Sun)';
+const GROUP_SUFFIX_RE = new RegExp(
+  `^${GROUP_LABEL_PATTERN}(?:\\s*\\+\\s*${GROUP_LABEL_PATTERN})*$`,
+  'i'
+);
+
 function shortenWeekdays(s) {
   return (s ?? '').replace(
     /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)s?\b/gi,
@@ -166,13 +173,17 @@ function groupLabel(description, summary) {
   // Day-identified groups ("Clown (Wednesday)", "Clown (Wed)") carry the
   // weekday in the SUMMARY suffix instead of the Matched reason.
   const t = /\(([^)]+)\)\s*$/.exec(summary ?? '');
+  const suffix = t ? t[1].trim() : '';
+  if (GROUP_SUFFIX_RE.test(suffix)) {
+    return shortenWeekdays(suffix);
+  }
   if (
     t &&
     /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)s?\b/i.test(
-      t[1]
+      suffix
     )
   ) {
-    return shortenWeekdays(t[1].trim());
+    return shortenWeekdays(suffix);
   }
   return '';
 }

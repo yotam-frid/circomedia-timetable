@@ -62,7 +62,7 @@ THIN_THRESHOLD = 8
 # in day_classify/event_creator/group_parse logic. Bump it whenever allocation
 # logic changes, or stale events survive forever (that is how Yotam kept a
 # duplicate Conditioning until EVENTS_VERSION was bumped after Fix 7).
-EVENTS_VERSION = 3
+EVENTS_VERSION = 4
 
 # Subjects hidden from card groups (whole-cohort single-group subjects)
 HIDE_SUBJECTS = {

@@ -30,6 +30,15 @@ _EXPLICIT_AUDIENCE_RE = re.compile(
     r"\b(?:group\s+(?:[0-9]+|[a-e])|par\s+group\s+\d+|major|minors|"
     r"all(?:\s+(?:years?|yr))?|y(?:ea)?rs?\s*[123])\b", re.I)
 _TEACHERS_BY_LEN = sorted(TEACHERS, key=len, reverse=True)
+_GROUP_LABEL = (
+    r"(?:Group\s+[0-9A-E]|PAR\s+Group\s+\d+|Major|Minors|All|"
+    r"Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|"
+    r"Mon|Tue|Tues|Wed|Thu|Thurs|Fri|Sat|Sun)"
+)
+_GROUP_LABEL_RE = re.compile(
+    rf"^{_GROUP_LABEL}(?:\s*\+\s*{_GROUP_LABEL})*$", re.I)
+_TARGET_GROUP_RE = re.compile(
+    r"^(.+?)\s*\([^()]*,\s*(?:Year\s+)?\d\)$", re.I)
 
 
 def _has_explicit_audience(texts):
@@ -188,6 +197,129 @@ def _event_name(block):
     if sub:
         return f"{base} - {sub}"
     return base
+
+
+def _normalize_group_label(value):
+    value = " ".join(str(value or "").split())
+    if not value:
+        return ""
+    normalized = []
+    for part in (p.strip() for p in value.split("+")):
+        m = re.fullmatch(r"Group\s+([0-9A-E])", part, re.I)
+        if m:
+            normalized.append(f"Group {m.group(1).upper()}")
+            continue
+        m = re.fullmatch(r"PAR\s+Group\s+(\d+)", part, re.I)
+        if m:
+            normalized.append(f"PAR Group {m.group(1)}")
+            continue
+        low = part.lower()
+        if low in {"major", "minors", "all"}:
+            normalized.append(low.capitalize())
+            continue
+        normalized.append({
+            "monday": "Mon", "tuesday": "Tue", "wednesday": "Wed",
+            "thursday": "Thu", "friday": "Fri", "saturday": "Sat",
+            "sunday": "Sun", "tues": "Tue", "thurs": "Thu",
+        }.get(low, part))
+    return " + ".join(normalized)
+
+
+def _group_from_target(target):
+    """Extract a concrete group label from a classifier target."""
+    m = _TARGET_GROUP_RE.fullmatch(str(target or ""))
+    if not m:
+        return ""
+    group = _normalize_group_label(m.group(1))
+    return group if _GROUP_LABEL_RE.fullmatch(group) else ""
+
+
+_GROUP_TEXT_RE = re.compile(rf"\b(?:{_GROUP_LABEL})\b", re.I)
+
+
+def _group_from_block(texts):
+    for text in texts or []:
+        text = str(text)
+        for match in _GROUP_TEXT_RE.finditer(text):
+            group = _normalize_group_label(match.group(0))
+            if group.lower() == "all" and re.match(
+                    r"\ball\s+(?:years?|yr)\b", text[match.start():], re.I):
+                continue
+            return group
+    return ""
+
+
+def _group_matches_student(group, student_groups):
+    available = {str(g).lower() for g in student_groups or ()}
+    for part in (p.strip().lower() for p in group.split("+")):
+        if part.startswith("par group "):
+            part = "group " + part.rsplit(" ", 1)[-1]
+        if part in available:
+            return True
+    return False
+
+
+def _target_group_for_student(target, student_groups):
+    group = _group_from_target(target)
+    if not group:
+        return ""
+    if group.lower() == "all":
+        return group if student_groups else ""
+    return group if _group_matches_student(group, student_groups) else ""
+
+
+def _day_group_for_student(s_key, subject, weekday, student_group_data):
+    day = DAY_LABELS[weekday]
+    candidates = []
+    for info in student_group_data.get(s_key, []):
+        if (info.get("subject") or "").lower() != subject.lower():
+            continue
+        days = {
+            _normalize_group_label(d)
+            for d in (info.get("days") or [])
+        }
+        if day in days and info.get("group"):
+            candidates.append(_normalize_group_label(info["group"]))
+    if not candidates:
+        return ""
+
+    def priority(group):
+        if group.lower().startswith(("group ", "par group ")):
+            return 0
+        if group.lower() in {"major", "minors"}:
+            return 1
+        return 2
+
+    return sorted(set(candidates), key=lambda group: (priority(group), group))[0]
+
+
+def _append_group(name, group):
+    if not group or re.search(rf"(?<!\w){re.escape(group)}(?!\w)", name, re.I):
+        return name
+    return f"{name} ({group})"
+
+
+def _student_event(event, group):
+    if not group:
+        return event
+    student_event = dict(event)
+    student_event["name"] = _append_group(event["name"], group)
+    return student_event
+
+
+def _named_group_for_student(s_key, subject, block, target, student_group_data):
+    student_groups = {
+        info.get("group", "")
+        for info in student_group_data.get(s_key, [])
+        if (info.get("subject") or "").lower() == subject.lower()
+    }
+    literal = _group_from_block(block.get("texts", []))
+    if literal:
+        return literal if _group_matches_student(literal, student_groups) else ""
+    target_group = _group_from_target(target)
+    if target_group.lower() == "all":
+        return ""
+    return target_group if _group_matches_student(target_group, student_groups) else ""
 
 
 def _teachers(texts):
@@ -692,7 +824,10 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
                     # falls through to the day-session rule below.
                     if _target_matches_student(target, subject, subj_groups.get(sl, set()), sy,
                                                group_allowed=marked):
-                        by_student.setdefault(s_key, []).append(event)
+                        group = _target_group_for_student(
+                            target, subj_groups.get(sl, set()))
+                        by_student.setdefault(s_key, []).append(
+                            _student_event(event, group))
                         continue
                     # Whole-cohort subjects (Teacher Training) grant without
                     # any per-student group entry.
@@ -704,7 +839,10 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
                     # blocks (a named appointment is nobody else's lesson).
                     if not marked and target != "student_match" and _day_session_matches(
                             weekday, sl, cy, sy, student_days_by_subject.get(s_key, {})):
-                        by_student.setdefault(s_key, []).append(event)
+                        group = _day_group_for_student(
+                            s_key, subject, weekday, student_group_data)
+                        by_student.setdefault(s_key, []).append(
+                            _student_event(event, group))
                         continue
                     # Context 3 whole-cohort company meeting (Pro Tour briefs).
                     if sl == "context 3" and cy is not None and cy == sy \
@@ -752,13 +890,17 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
                         end += dt.timedelta(hours=12)
 
                     for s_key in matched:
+                        name = _event_name_for_student(
+                            block, s_key, student_tokens)
+                        group = _named_group_for_student(
+                            s_key, subject, block, cls.get("target"),
+                            student_group_data)
                         event = {
                             "date": event_date, "start": start, "end": end,
                             # Shared 1-to-1 slots are titled per attendee:
                             # 'Joanna- Nicky  Kitty - Jonathan' becomes each
                             # student's own segment.
-                            "name": _event_name_for_student(
-                                block, s_key, student_tokens),
+                            "name": _append_group(name, group),
                             "location": block["location"],
                             "subject": subject, "teachers": teachers,
                             "weeks": applicable_weeks, "week_num": week_num,
