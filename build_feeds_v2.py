@@ -48,7 +48,7 @@ from v2.group_parse import drop_junk
 from v2.spaces import build_space_events, make_space_uid
 from v2.feed_gen import to_ics, dedup_events, slugify, _subject_key
 from v2.spaces import to_space_ics
-from v2.weeks import weeks_from_filename
+from v2.weeks import weeks_from_filename, is_timetable_name
 
 DISPLAY_OVERRIDES = {
     "jj angel": "JJ Angel",
@@ -135,9 +135,20 @@ def save_state(state):
 
 
 def find_weeks(incoming):
-    files = [p for p in sorted(incoming.iterdir())
-             if p.suffix.lower() == ".xlsx" and "week" in p.name.lower()
-             and p.name.lower().startswith("term")]
+    """Timetable workbooks in incoming/, plus a reason for every skip.
+
+    The fetcher downloads every .xlsx, so this is the only gate. Skips are
+    reported rather than dropped silently, so a new publisher naming shape
+    shows up in the sync log instead of vanishing.
+    """
+    files = []
+    for p in sorted(incoming.iterdir()):
+        if p.suffix.lower() != ".xlsx":
+            continue
+        if is_timetable_name(p.name):
+            files.append(p)
+        else:
+            print(f"skipped: {p.name} (no term/week marker)", file=sys.stderr)
     if not files:
         print(f"No timetable xlsx found in {incoming}", file=sys.stderr)
     return files
@@ -212,6 +223,13 @@ def process_one_file(path):
     stem = path.stem
     wb = openpyxl.load_workbook(path, data_only=True)
     weeks = weeks_from_filename(path)
+    if weeks is None:
+        wb.close()
+        raise SystemExit(
+            f"{path.name}: no standalone week number in the filename, so the "
+            f"weeks it covers cannot be determined. Rename it (e.g. "
+            f"'Term 1a Weeks 3-5 2026.xlsx') rather than guessing a range."
+        )
     groups_by_subject_year, students_by_year, student_group_data = \
         extract_groups_from_xlsx(wb, xlsx_path=path)
     students_by_year, student_group_data = drop_junk(students_by_year, student_group_data)

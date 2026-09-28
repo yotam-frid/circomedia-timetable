@@ -6,7 +6,6 @@ later runs reuse that session without requesting Microsoft Graph permissions.
 """
 
 import argparse
-import re
 import sys
 import time
 from pathlib import Path
@@ -22,8 +21,11 @@ LOGIN_URL = (
     "Shared%20Documents/Term%201a%20Week%201%202026.xlsx"
     "?d=w96932b5038cf4031badea5f6547f6764&csf=1&web=1&e=zumayo"
 )
-# Publishers use both "Week 1 2026" and "Weeks 2" naming conventions.
-TIMETABLE_RE = re.compile(r"^Term .* Weeks? \d+(?: \d{4})?\.xlsx$", re.I)
+# This script deliberately applies NO filename grammar. Publishers use
+# inconsistent names ("Week 1 2026", "Weeks 3-5 2026 -", "Weeks 1-3 2026"),
+# and a strict filter here silently skipped range workbooks. Every .xlsx in
+# the folder is downloaded; v2.weeks.is_timetable_name decides what is a
+# timetable at build time, where unrecognised names can be reported.
 PROFILE = Path(".sharepoint-browser-profile")
 INCOMING = Path("incoming")
 
@@ -36,7 +38,8 @@ def main():
     ap = argparse.ArgumentParser(description="Fetch SharePoint timetables")
     ap.add_argument("--login", action="store_true", help="open a browser and wait for sign-in")
     ap.add_argument("--headless", action="store_true", help="hide browser (only after sign-in works)")
-    ap.add_argument("--all", action="store_true", help="download every matching timetable")
+    ap.add_argument("--all", action="store_true",
+                    help="download every .xlsx (default; accepted for compatibility)")
     args = ap.parse_args()
 
     with sync_playwright() as p:
@@ -63,13 +66,13 @@ def main():
                 "then run this again with --login."
             )
         items = response.json().get("value", [])
-        candidates = [f for f in items if TIMETABLE_RE.match(f.get("Name", ""))]
+        candidates = [f for f in items
+                      if f.get("Name", "").lower().endswith(".xlsx")]
         if not candidates:
             context.close()
-            sys.exit(f"No timetable matching {TIMETABLE_RE.pattern!r} in {FOLDER}")
+            sys.exit(f"No .xlsx files in {FOLDER}")
         INCOMING.mkdir(exist_ok=True)
-        selected = candidates if args.all else [max(candidates, key=lambda f: f["TimeLastModified"])]
-        for item in sorted(selected, key=lambda f: f["Name"]):
+        for item in sorted(candidates, key=lambda f: f["Name"]):
             file_url = f"{SITE}/_api/web/GetFileByServerRelativePath(decodedUrl=@file)/$value?@file='{quote(item['ServerRelativeUrl'])}'"
             content = context.request.get(file_url)
             if content.status != 200:
