@@ -52,7 +52,11 @@ def main():
         sys.exit(f"rsync failed:\n{r.stdout}\n{r.stderr}")
 
     lines = r.stdout.splitlines()
-    transferred = sum(1 for ln in lines if ln.startswith(">f"))
+    # Itemize marks direction, not motion: '<' means the file is being sent to
+    # the remote, '>' means it is being received from it. This script only ever
+    # pushes, so transferred files are '<f' — counting '>f' reported zero for
+    # every run since this line was written and quietly zeroed the usage meter.
+    transferred = sum(1 for ln in lines if ln.startswith("<f"))
     deleted = sum(1 for ln in lines if ln.startswith("*deleting"))
 
     cycle = datetime.now().strftime("%Y-%m")
