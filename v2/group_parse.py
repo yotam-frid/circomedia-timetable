@@ -2,10 +2,21 @@
 
 import re
 
-DAY_RE = re.compile(r"monday|tuesday|wednesday|thursday|friday", re.I)
-DAY_SHORT = {
-    "monday": "Mon", "tuesday": "Tue", "wednesday": "Wed",
-    "thursday": "Thu", "friday": "Fri",
+_DAY_TOKEN_RE = re.compile(r"[a-z]+", re.I)
+# Every spelling a group sheet uses for a day header, mapped to the canonical
+# Mon..Sun vocabulary the allocator compares against. Publishers abbreviate
+# freely (the Year 2 sheet heads the Stand Up column "Friday" while every
+# other day cell there is "Monday " with a trailing space), and a day cell
+# that fails to parse is not a cosmetic loss: the column's group label is
+# derived from it, so an unreadable day silently deletes the class.
+DAY_ALIASES = {
+    "monday": "Mon", "mon": "Mon",
+    "tuesday": "Tue", "tue": "Tue", "tues": "Tue",
+    "wednesday": "Wed", "wed": "Wed",
+    "thursday": "Thu", "thu": "Thu", "thur": "Thu", "thurs": "Thu",
+    "friday": "Fri", "fri": "Fri",
+    "saturday": "Sat", "sat": "Sat",
+    "sunday": "Sun", "sun": "Sun",
 }
 
 # Teacher names — used for stripping from segments in event_creator.
@@ -51,9 +62,17 @@ def _normalize_name(name):
 
 
 def _extract_days(text):
-    """Extract day abbreviations from text like 'Tuesday and Thursday'."""
-    found = DAY_RE.findall(text)
-    return [DAY_SHORT[d.lower()] for d in found] if found else []
+    """Canonical day labels from a day cell: 'Tuesday and Thursday', 'Fridays',
+    'Mon'. Both lookups are exact against DAY_ALIASES, so a plural is only
+    ever a real day name and not a substring match. First-seen order,
+    duplicates collapsed."""
+    out = []
+    for token in _DAY_TOKEN_RE.findall(text or ""):
+        low = token.lower()
+        day = DAY_ALIASES.get(low) or DAY_ALIASES.get(low[:-1] if low.endswith("s") else low)
+        if day and day not in out:
+            out.append(day)
+    return out
 
 
 def _merged_map(ws):
@@ -454,24 +473,64 @@ JUNK_ROSTER_RE = re.compile(
     r"\bneed\b|monday|tuesday|wednesday|thursday|friday|\bwk\b|\?|,", re.I)
 
 
-def drop_junk(students_by_year, student_group_data):
-    """Strip junk/teacher entries the group sheets picked up.
+def enrolled_students(worksheet):
+    """Names the school enrolled, read off the Core Skills Groups sheet.
+
+    That sheet is the school's own cross-year enrolment list: one row per
+    student, cross-referenced into the numbered blocks. It is the only
+    place a person is stated to be a *student* rather than a name written
+    in a group column, and it is what separates a mentor from a student who
+    happens to share a name with one — Lisa is a Year 2 student on the
+    group sheets AND a Core Skills tutor, and only this list says so.
+
+    Returns a set of lowercase keys (nickname merges applied); empty when
+    the sheet is absent, which leaves callers on their previous behaviour.
+    """
+    mm = _merged_map(worksheet)
+    names = set()
+    for r in range(5, (worksheet.max_row or 0) + 1):
+        for c in range(2, (worksheet.max_column or 0) + 1):
+            vr, _vc = mm.get((r, c), (r, c))
+            v = worksheet.cell(row=vr, column=c).value
+            if v is None:
+                continue
+            token = " ".join(str(v).split()).lower()
+            if not token or token.isdigit():
+                continue  # the numbered block column, not a name
+            names.add(_normalize_name(token))
+    return names
+
+
+def drop_junk(students_by_year, student_group_data, enrolled=None):
+    """Strip junk entries the group sheets picked up.
 
     Lives here (not in the build script) because both the production build
     and the v2 CLI must apply it: the day-sheet cache fingerprint is derived
     from students_by_year, so disagreeing about the roster silently
     invalidates every cached classification and forces a full Jev re-run.
+
+    `enrolled` (from enrolled_students) is the school's own enrolment list
+    and takes precedence over the staff-name list: a person on it is a
+    student even if a mentor shares their name, and a person absent from it
+    is dropped when their name is a known staff name. Without it the list is
+    the only signal, which is what silently deleted Lisa.
     """
     import sys
-    bad = {s for s in student_group_data
-           if len(s) > 25 or JUNK_ROSTER_RE.search(s) or s in TEACHERS}
+    bad = set()
+    for s in student_group_data:
+        if len(s) > 25 or JUNK_ROSTER_RE.search(s):
+            bad.add(s)
+        elif s in TEACHERS and (not enrolled or s not in enrolled):
+            bad.add(s)
+    for b in sorted(bad):
+        print(f"  drop junk roster '{b}'", file=sys.stderr)
     if bad:
-        for b in sorted(bad):
-            print(f"  drop junk roster '{b}'", file=sys.stderr)
         students_by_year = {
             y: [n for n in ns if n.lower() not in bad]
             for y, ns in students_by_year.items()
         }
-        students_by_year = {y: ns for y, ns in students_by_year.items() if ns}
         student_group_data = {k: v for k, v in student_group_data.items() if k not in bad}
+    # Unconditional: a year that ends up with nobody is not a cohort, and
+    # leaving it behind would put an empty year in the published roster.
+    students_by_year = {y: ns for y, ns in students_by_year.items() if ns}
     return students_by_year, student_group_data

@@ -40,6 +40,15 @@ _GROUP_LABEL_RE = re.compile(
 _TARGET_GROUP_RE = re.compile(
     r"^(.+?)\s*\([^()]*,\s*(?:Year\s+)?\d\)$", re.I)
 
+# A roster group whose label is a weekday. The group sheets label such a
+# column with its day, because the class has no other name: the Year 2 Clown
+# column is headed "Clown / Monday" and the Stand Up column "Stand up /
+# Friday". A weekday label says *when* the group meets, not *which* group it
+# is, so it can never be corroborated by a day-sheet block — see
+# _target_matches_student.
+_WEEKDAY_RE = re.compile(
+    r"^(?:Mon|Tue|Tues|Wed|Thu|Thur|Thurs|Fri|Sat|Sun)$", re.I)
+
 
 def _has_explicit_audience(texts):
     return bool(_EXPLICIT_AUDIENCE_RE.search(" | ".join(texts)))
@@ -353,13 +362,21 @@ def _target_matches_student(target, subject, student_groups_for_subject, student
     group regardless of the year in the target. The year comes from
     the header cell colour and is unreliable for cross-year subjects.
 
-    group_allowed gates EXPLICIT group-name matches (a student holding
-    'Group C' for the subject). The allocator trusts a group label only
+    group_allowed gates EXPLICIT group-NAME matches (a student holding
+    'Group C' for the subject). The allocator trusts a group name only
     when the block text actually names it ('Group c'); an unmarked block
     ('Acro Majors | Lisa & Ethan') is a day-session, not a group
     session, so it must never grant by group name alone. Cohort targets
     ('All Years', 'All Year N', 'All (subj, year)') are explicit
     audience labels and always apply.
+
+    A WEEKDAY label ('Mon (Clown, 2)', 'Fri (Stand up, 2)') is not a
+    group name and is not gated: the group sheets name a day-identified
+    column after the day it meets, and no day-sheet block can ever spell
+    that out, so gating it would make the label unmatchable and leave the
+    whole subject to the day-session heuristic. Such a label is already
+    subject- and year-scoped by the target itself, so matching it against
+    the student's own group is exact.
     """
     if target == "All Years":
         return True
@@ -382,7 +399,7 @@ def _target_matches_student(target, subject, student_groups_for_subject, student
         # group: an unmarked cross-colour block whose Jev
         # target drifted to a group ('Major (Acro, 2)' on a Wed 'Acro
         # Majors' block) must not mint events for that group.
-        if not group_allowed:
+        if not group_allowed and not _WEEKDAY_RE.match(group):
             return False
         # Check if student has this group for this subject (year-blind).
         # Support compound group names like "Major + Minor":
@@ -523,10 +540,19 @@ def _day_session_matches(weekday, subject, cy, sy, days_by_subject):
     """Day-session rule: an unmarked, same-year-coloured session on a day
     the student's group meets ('Acro | Lisa and Ethan'). Caller guarantees
     the block has no Group/PAR marker in its text and the colour gate passed.
+
+    days_by_subject is the student's map of subject -> days met, carrying an
+    entry for every subject they are enrolled in (possibly with no days).
+    A subject absent from the map is one they are not enrolled in and never
+    matches. An enrolment with no recorded day meets on whatever day its
+    subject is timetabled — the same convention as a block with no week
+    marker, and the group sheet's silence is not a statement of absence.
     """
-    days = days_by_subject.get(subject.lower(), set())
-    if not days:
+    days = days_by_subject.get(subject.lower())
+    if days is None:
         return False
+    if not days:
+        return True
     return DAY_LABELS[weekday] in days
 
 
@@ -612,13 +638,20 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
     # the day-session rule (student's group meets on that weekday).
     student_tokens = _student_tokens_by_key(students_by_year)
     roster_tokens = set().union(*student_tokens.values()) if student_tokens else set()
+    # Every enrolled subject gets an entry, days or not: the day-session
+    # rule tells "not enrolled" (no entry) from "enrolled, day not recorded"
+    # (empty entry), and only the second may fall back to "meets whenever
+    # timetabled". A day-identified column ("Clown / Monday") is labelled
+    # from its day cell, so an unreadable day leaves an empty entry and the
+    # class survives.
     student_days_by_subject = {}
     for s_key, infos in student_group_data.items():
         for info in infos:
             subj = (info.get("subject") or "").lower()
-            days = info.get("days") or []
-            if days:
-                student_days_by_subject.setdefault(s_key, {}).setdefault(subj, set()).update(days)
+            if not subj or subj == "unknown":
+                continue
+            bucket = student_days_by_subject.setdefault(s_key, {}).setdefault(subj, set())
+            bucket.update(info.get("days") or [])
 
     by_student = {}
 

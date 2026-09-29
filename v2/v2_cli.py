@@ -23,6 +23,7 @@ from .feed_gen import generate_feeds
 from .spaces import build_space_events, generate_space_feeds
 from .jev_state import build_state
 from .jev_client import jev_call
+from .group_parse import enrolled_students
 
 
 DAY_SHEET_RE = re.compile(r"^(?:monday|tuesday|wednesday|thursday|friday)", re.I)
@@ -276,15 +277,25 @@ def extract_groups_from_xlsx(wb, year_filter=None, force=False, xlsx_path=None):
             display = infos[0].get("_display", name_lower)
             students_by_year.setdefault(year, []).append(display)
 
-    # Build groups_by_subject_year from the student data.
+    # Build groups_by_subject_year from the student data. A subject is
+    # registered by being enrolled, not by carrying a group label: a
+    # day-identified column ("Clown / Monday", "Stand up / Friday") is
+    # labelled from its day cell, and build_events refuses any block whose
+    # subject is absent here — so letting an unreadable day cell unregister
+    # the subject would delete the whole class cohort-wide. Consumers that
+    # need a label (the classifier's target options) simply see an empty
+    # list for such a subject.
     groups_by_subject_year = {}
     for name_lower, year_map in by_student.items():
         for year, infos in year_map.items():
             for info in infos:
                 subj = info.get("subject", "")
-                grp = info.get("group", "")
-                if subj and grp:
-                    groups_by_subject_year.setdefault(subj, {}).setdefault(year, set()).add(grp)
+                if not subj or subj == "Unknown":
+                    continue
+                groups_by_subject_year.setdefault(subj, {}).setdefault(year, set())
+                grp = (info.get("group") or "").strip()
+                if grp:
+                    groups_by_subject_year[subj][year].add(grp)
     # Convert sets to sorted lists.
     for subj in groups_by_subject_year:
         for year in groups_by_subject_year[subj]:
@@ -302,6 +313,13 @@ def extract_groups_from_xlsx(wb, year_filter=None, force=False, xlsx_path=None):
     return groups_by_subject_year, students_by_year, student_group_data
 
 
+def enrolled_from_wb(wb):
+    """The school's cross-year enrolment list, or None when unavailable."""
+    sheet = next((s for s in wb.sheetnames if s.strip().lower() == "core skills groups"),
+                 None)
+    return enrolled_students(wb[sheet]) if sheet else None
+
+
 def process_file(path, weeks=None, out_dir=None, force=False, student=None):
     """Full pipeline: groups -> classify day sheets -> events -> ICS."""
     wb = openpyxl.load_workbook(path, data_only=True)
@@ -317,7 +335,8 @@ def process_file(path, weeks=None, out_dir=None, force=False, student=None):
     # and the CLI would pay a full Jev re-run.
     from .group_parse import drop_junk
     students_by_year, student_group_data = drop_junk(students_by_year,
-                                                      student_group_data)
+                                                      student_group_data,
+                                                      enrolled=enrolled_from_wb(wb))
 
     # Step 2: Classify day sheets and build events.
     print("\nStep 2: Classifying day sheets...")

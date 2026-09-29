@@ -42,7 +42,7 @@ from zoneinfo import ZoneInfo
 
 import openpyxl
 
-from v2.v2_cli import extract_groups_from_xlsx, _is_day_sheet
+from v2.v2_cli import extract_groups_from_xlsx, enrolled_from_wb, _is_day_sheet
 from v2.event_creator import build_events
 from v2.group_parse import drop_junk
 from v2.spaces import build_space_events, make_space_uid
@@ -62,7 +62,11 @@ THIN_THRESHOLD = 8
 # in day_classify/event_creator/group_parse logic. Bump it whenever allocation
 # logic changes, or stale events survive forever (that is how Yotam kept a
 # duplicate Conditioning until EVENTS_VERSION was bumped after Fix 7).
-EVENTS_VERSION = 4
+#
+# 6: roster membership decided by the school's own Core Skills enrolment
+# list, so a student who shares a name with a mentor is no longer deleted
+# (was 4, when a staff-name match alone removed Lisa and her Stand Up).
+EVENTS_VERSION = 6
 
 # Subjects hidden from card groups (whole-cohort single-group subjects)
 HIDE_SUBJECTS = {
@@ -232,7 +236,8 @@ def process_one_file(path):
         )
     groups_by_subject_year, students_by_year, student_group_data = \
         extract_groups_from_xlsx(wb, xlsx_path=path)
-    students_by_year, student_group_data = drop_junk(students_by_year, student_group_data)
+    students_by_year, student_group_data = drop_junk(
+        students_by_year, student_group_data, enrolled=enrolled_from_wb(wb))
     day_sheets = [(n, wb[n]) for n in wb.sheetnames if _is_day_sheet(n)]
     events = build_events(day_sheets, groups_by_subject_year, students_by_year,
                           student_group_data, weeks_to_cover=weeks, wb=wb,
