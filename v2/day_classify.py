@@ -206,7 +206,8 @@ def extract_blocks(ws, wb=None, legend=None):
             for rr in range(r + 1, end):
                 vv = ws.cell(row=rr, column=col).value
                 if vv and ("student training ends" in str(vv).lower()
-                           or str(vv).strip().lower() == "closed"):
+                           or str(vv).strip().lower() == "closed"
+                           or "///" in str(vv)):
                     end = rr
                     break
             times = _parse_time(t)

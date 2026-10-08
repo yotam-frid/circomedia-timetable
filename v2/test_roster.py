@@ -8,7 +8,7 @@ membership cannot be decided from a staff-name list alone.
 
 import unittest
 
-from v2.group_parse import drop_junk, enrolled_students, TEACHERS
+from v2.group_parse import assemble, drop_junk, enrolled_students, TEACHERS
 
 
 def enrolled_with(*names):
@@ -42,6 +42,31 @@ class TestEnrolledStudents(unittest.TestCase):
         ws["B6"] = "Meg"
         # 'meg' is the roster's short form of Megan.
         self.assertEqual(enrolled_students(ws), {"theo", "megan"})
+
+
+class TestGroupWeekdays(unittest.TestCase):
+    def test_unmerged_day_headers_and_students_days_are_independent(self):
+        import openpyxl
+        ws = openpyxl.Workbook().active
+        ws.merge_cells("B3:E3")
+        cells = {"B3": "Physical Theatre", "B4": "Tuesday", "D4": "Thursday",
+                 "B5": "Group C", "C5": "Group D", "D5": "Group C", "E5": "Group D",
+                 "B6": "JJ", "E6": "JJ", "B7": "Edie", "D7": "Edie",
+                 "C7": "Corina", "E7": "Corina"}
+        answers = {"q_3_2_discipline": {"noul": 1}}
+        for address, value in cells.items():
+            ws[address] = value
+            cell = ws[address]
+            if value.startswith("Group"):
+                answers[f"q_{cell.row}_{cell.column}_group"] = {"noul": 1}
+            elif cell.row >= 6:
+                answers[f"q_{cell.row}_{cell.column}_student"] = {"noul": 1}
+        entries = assemble(ws, {"answers": answers, "resolutions": {}}, year=1)
+        days = {(name, info["group"]): info["days"] for name, info in entries}
+        self.assertEqual(days[("jjangel", "Group C")], ["Tue"])
+        self.assertEqual(days[("jjangel", "Group D")], ["Thu"])
+        self.assertEqual(days[("edie", "Group C")], ["Tue", "Thu"])
+        self.assertEqual(days[("corina", "Group D")], ["Tue", "Thu"])
 
 
 class TestDropJunk(unittest.TestCase):

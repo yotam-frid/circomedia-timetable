@@ -227,7 +227,10 @@ def extract_groups_from_xlsx(wb, year_filter=None, force=False, xlsx_path=None):
         # Per-sheet cache: key = filename + sheet name, fingerprint =
         # the Jev-visible state (values + merges + bold).
         entries = None
-        cache_fp = _cache_fingerprint(ws, 0 if is_cs else year)
+        # Assembled memberships also depend on deterministic parser rules.
+        # Version 2 preserves unmerged weekday headings and isolates day lists.
+        cache_fp = sheet_cache.fingerprint(
+            "group-parser-v2", _cache_fingerprint(ws, 0 if is_cs else year))
         if not force:
             cached = sheet_cache.load(xlsx_name, name, fingerprint=cache_fp)
             if cached is not None:

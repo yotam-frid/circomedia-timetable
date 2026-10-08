@@ -6,8 +6,14 @@ Up) whose roster group is a weekday rather than a group name.
 """
 
 import unittest
+from unittest.mock import patch
 
-from v2.event_creator import _day_session_matches, _target_matches_student
+import openpyxl
+
+from v2.event_creator import (
+    _day_session_matches, _groups_on_day, _target_matches_student, build_events,
+)
+from v2.day_classify import extract_blocks
 from v2.group_parse import _extract_days
 
 
@@ -73,6 +79,56 @@ class TestDaySession(unittest.TestCase):
         days = {"clown": {"Mon"}, "acro": {"Tue"}}
         self.assertTrue(_day_session_matches(0, "clown", 2, 2, days))
         self.assertFalse(_day_session_matches(2, "clown", 2, 2, days))
+
+
+class TestWeekdayScopedAllocation(unittest.TestCase):
+    def test_student_switching_groups_gets_only_each_days_group(self):
+        wb = openpyxl.Workbook()
+        wb.active.title = "Tuesday"
+        wb.create_sheet("Thursday")
+        infos = [{"subject": "Physical Theatre", "group": "Group C", "days": ["Tue"]},
+                 {"subject": "Physical Theatre", "group": "Group D", "days": ["Thu"]}]
+        classes = [{"block": {"texts": ["Physical Theatre", f"Group {group}"],
+                              "location": "Studio 2", "start_time": (hour, 15),
+                              "end_time": (hour + 1, 30), "color_year": 1,
+                              "start_row": 4, "col": 2},
+                    "subject": "Physical Theatre",
+                    "target": f"Group {group} (Physical Theatre, 1)", "weeks": [4]}
+                   for group, hour in [("C", 14), ("D", 16)]]
+        with patch("v2.day_classify.classify_day_sheet", return_value=classes):
+            events = build_events([(s.title, s) for s in wb],
+                                  {"Physical Theatre": {1: ["Group C", "Group D"]}},
+                                  {1: ["JJ Angel", "Corina", "Unknown Day"]},
+                                  {"jj angel": infos,
+                                   "corina": [{**infos[1], "days": ["Tue", "Thu"]}],
+                                   "unknown day": [{**infos[0], "days": []}]},
+                                  weeks_to_cover=[4], wb=wb)
+        self.assertEqual([(str(e["date"]), e["name"]) for e in events["jj angel"]],
+                         [("2026-10-06", "Physical Theatre (Group C)"),
+                          ("2026-10-08", "Physical Theatre (Group D)")])
+        self.assertEqual(len(events["corina"]), 2)
+        self.assertEqual(len(events["unknown day"]), 2)
+
+    def test_single_group_still_gets_theory_outside_recorded_practical_day(self):
+        infos = [{"subject": "Conditioning", "group": "Group D", "days": ["Wed"]}]
+        self.assertEqual(_groups_on_day(infos, "Conditioning", 0), {"group d"})
+
+
+class TestDayBlockBoundaries(unittest.TestCase):
+    def test_dance_does_not_include_afternoon_closure(self):
+        ws = openpyxl.Workbook().active
+        ws.title = "Friday"
+        for cell, value in {"G2": "Studio 1", "G4": "8.45 - 10.00",
+                            "G6": "Dance", "G7": "All Yr 1", "G8": "Charlie White",
+                            "G9": "//////////////////////////",
+                            "G22": "Closed to students",
+                            "G36": "Student Training Ends"}.items():
+            ws[cell] = value
+        blocks = extract_blocks(ws)
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0]["texts"], ["Dance", "All Yr 1", "Charlie White"])
+        self.assertEqual(blocks[0]["end_row"], 9)
+        self.assertEqual(blocks[0]["end_time"], (10, 0))
 
 
 class TestExtractDays(unittest.TestCase):

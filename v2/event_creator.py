@@ -302,6 +302,25 @@ def _day_group_for_student(s_key, subject, weekday, student_group_data):
     return sorted(set(candidates), key=lambda group: (priority(group), group))[0]
 
 
+def _groups_on_day(infos, subject, weekday):
+    """Disambiguate students switching groups by day.
+
+    A single group still follows explicit timetable labels: roster days may
+    describe practical sessions but omit theory sessions (Conditioning).
+    """
+    memberships = [info for info in infos
+                   if (info.get("subject") or "").lower() == subject.lower()]
+    groups = {info.get("group", "").strip().lower() for info in memberships}
+    if len(groups) <= 1:
+        return groups
+    return {
+        info.get("group", "").strip().lower()
+        for info in memberships
+        if (not info.get("days")
+             or DAY_LABELS[weekday] in info["days"])
+    }
+
+
 def _append_group(name, group):
     if not group or re.search(rf"(?<!\w){re.escape(group)}(?!\w)", name, re.I):
         return name
@@ -855,10 +874,14 @@ def build_events(day_sheets, groups_by_subject_year, students_by_year,
                     # carries the group label. Cohort targets
                     # ('All', 'All Year N') always apply; an unmarked block
                     # falls through to the day-session rule below.
-                    if _target_matches_student(target, subject, subj_groups.get(sl, set()), sy,
+                    matching_groups = subj_groups.get(sl, set())
+                    if marked:
+                        matching_groups = _groups_on_day(
+                            student_group_data.get(s_key, []), subject, weekday)
+                    if _target_matches_student(target, subject, matching_groups, sy,
                                                group_allowed=marked):
                         group = _target_group_for_student(
-                            target, subj_groups.get(sl, set()))
+                            target, matching_groups)
                         by_student.setdefault(s_key, []).append(
                             _student_event(event, group))
                         continue

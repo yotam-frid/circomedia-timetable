@@ -66,7 +66,10 @@ THIN_THRESHOLD = 8
 # 6: roster membership decided by the school's own Core Skills enrolment
 # list, so a student who shares a name with a mentor is no longer deleted
 # (was 4, when a staff-name match alone removed Lisa and her Stand Up).
-EVENTS_VERSION = 6
+# 7: weekday-scoped group membership and slash-separated day blocks.
+# 8: scope weekdays only when disambiguating multiple groups; preserve
+# explicit single-group theory sessions omitted from roster day headings.
+EVENTS_VERSION = 8
 
 # Subjects hidden from card groups (whole-cohort single-group subjects)
 HIDE_SUBJECTS = {

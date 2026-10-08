@@ -249,7 +249,8 @@ def assemble(ws, classification, year=None):
                 if col not in col_subject:
                     col_subject[col] = label
 
-    # Pre-build column -> days.
+    # Pre-build column -> days. Unmerged day headings span the labelled
+    # columns to their right, up to the next day heading or subject.
     col_days = {}
     for col in range(2, max_col + 1):
         for r in range(2, 6):
@@ -260,6 +261,13 @@ def assemble(ws, classification, year=None):
                 days = _extract_days(val)
                 if days:
                     col_days[col] = days
+                    break
+        if col not in col_days and col_subject.get(col):
+            for left in range(col - 1, 1, -1):
+                if col_subject.get(left) != col_subject[col]:
+                    break
+                if left in col_days:
+                    col_days[col] = list(col_days[left])
                     break
 
     results = []
@@ -409,7 +417,7 @@ def assemble(ws, classification, year=None):
                 results.append((norm_name, {
                     "subject": subject or "Unknown",
                     "group": group_label or "",
-                    "days": days,
+                    "days": list(days),
                 }))
 
     # Deduplicate: merge entries for the same (subject, group) pair,
@@ -428,7 +436,8 @@ def assemble(ws, classification, year=None):
             grp = info["group"]
             key = (subj, grp)
             if key not in by_subj:
-                by_subj[key] = {"info": dict(info), "is_labelled": bool(grp)}
+                by_subj[key] = {"info": {**info, "days": list(info["days"])},
+                                "is_labelled": bool(grp)}
             else:
                 for d in info["days"]:
                     if d not in by_subj[key]["info"]["days"]:
