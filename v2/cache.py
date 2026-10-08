@@ -18,6 +18,8 @@ SKIP_CACHE = False
 import hashlib
 import json
 import re
+import os
+import tempfile
 from pathlib import Path
 
 CACHE_DIR = Path(__file__).resolve().parent / ".cache"
@@ -32,7 +34,7 @@ def set_enabled(on: bool) -> None:
 
 
 def enabled() -> bool:
-    return _enabled
+    return _enabled and not SKIP_CACHE
 
 
 def _slug(s: str) -> str:
@@ -57,7 +59,7 @@ def load(xlsx_name, sheet_name, fingerprint=None):
         entry = json.loads(path.read_text())
     except (OSError, ValueError):
         return None
-    if entry.get("version") != CACHE_VERSION:
+    if not isinstance(entry, dict) or entry.get("version") != CACHE_VERSION:
         return None
     if fingerprint is not None and entry.get("fingerprint") != fingerprint:
         return None
@@ -72,7 +74,43 @@ def save(xlsx_name, sheet_name, data, fingerprint=None):
         return
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     entry = {"version": CACHE_VERSION, "fingerprint": fingerprint, "data": data}
-    _path(xlsx_name, sheet_name).write_text(json.dumps(entry))
+    _atomic_save(_path(xlsx_name, sheet_name), entry)
+
+
+def _atomic_save(path, entry):
+    """Checkpoint results atomically, including concurrent writers."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=path.parent,
+                                         prefix=".tmp-", delete=False) as f:
+            temp = Path(f.name)
+            json.dump(entry, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp, path)
+    finally:
+        if temp is not None:
+            temp.unlink(missing_ok=True)
+
+
+def load_artifact(namespace, key):
+    """Content-addressed request/block results, independent of workbook names."""
+    if not enabled():
+        return None
+    try:
+        entry = json.loads((CACHE_DIR / namespace / f"{key}.json").read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(entry, dict) or entry.get("version") != CACHE_VERSION:
+        return None
+    return entry.get("data")
+
+
+def save_artifact(namespace, key, data):
+    if enabled():
+        _atomic_save(CACHE_DIR / namespace / f"{key}.json",
+                     {"version": CACHE_VERSION, "data": data})
 
 
 def fingerprint(*parts) -> str:

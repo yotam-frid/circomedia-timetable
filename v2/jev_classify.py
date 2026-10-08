@@ -1,6 +1,6 @@
 """Classify cells via Jev (two passes) + resolve student names."""
 
-from .jev_client import jev_call
+from .jev_client import jev_call, parallel_map
 from .jev_state import build_state
 
 BATCH_SIZE = 40  # cells per classification call
@@ -95,10 +95,11 @@ def _classify_sheet(ws, year):
     all_cells = list(_non_empty_cells(ws))
     answers = {}
 
-    for i in range(0, len(all_cells), BATCH_SIZE):
-        batch = all_cells[i : i + BATCH_SIZE]
-        questions = _make_classify_questions(batch)
-        batch_answers = jev_call(state, questions)
+    batches = [all_cells[i:i + BATCH_SIZE] for i in range(0, len(all_cells), BATCH_SIZE)]
+    def classify_batch(batch):
+        return jev_call(state, _make_classify_questions(batch))
+
+    for batch_answers in parallel_map(classify_batch, batches):
         answers.update(batch_answers)
 
     name_candidates = []
@@ -156,10 +157,11 @@ def classify_sheet(ws, year):
     resolutions = {}
     # Batch resolution calls too if there are many students.
     res_keys = list(res_questions.keys())
-    for i in range(0, len(res_keys), BATCH_SIZE):
-        batch_keys = res_keys[i : i + BATCH_SIZE]
-        batch_q = {k: res_questions[k] for k in batch_keys}
-        batch_answers = jev_call(state, batch_q)
+    batches = [res_keys[i:i + BATCH_SIZE] for i in range(0, len(res_keys), BATCH_SIZE)]
+    def resolve_batch(batch_keys):
+        return jev_call(state, {k: res_questions[k] for k in batch_keys})
+
+    for batch_answers in parallel_map(resolve_batch, batches):
         for key, ans in batch_answers.items():
             resolutions[key] = ans.get("choice", "")
 

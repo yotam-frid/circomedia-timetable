@@ -7,6 +7,7 @@ Usage:
 import argparse
 import re
 import sys
+import time
 from pathlib import Path
 
 try:
@@ -22,7 +23,7 @@ from .event_creator import build_events
 from .feed_gen import generate_feeds
 from .spaces import build_space_events, generate_space_feeds
 from .jev_state import build_state
-from .jev_client import jev_call
+from .jev_client import jev_call, metrics, reset_metrics, report_metrics
 from .group_parse import enrolled_students
 
 
@@ -203,7 +204,7 @@ def extract_groups_from_xlsx(wb, year_filter=None, force=False, xlsx_path=None):
 
     all_entries = []
     core_entries = []
-    total_calls = 0
+    initial_metrics = metrics()
     cached_sheets = 0
 
     for name in wb.sheetnames:
@@ -251,7 +252,6 @@ def extract_groups_from_xlsx(wb, year_filter=None, force=False, xlsx_path=None):
                 entries = assemble(ws, classification, year=year)
                 for student, info in entries:
                     all_entries.append((student, year, info))
-            total_calls += 2
             sheet_cache.save(xlsx_name, name, entries, fingerprint=cache_fp)
         elif is_cs:
             for student, info in entries:
@@ -310,7 +310,10 @@ def extract_groups_from_xlsx(wb, year_filter=None, force=False, xlsx_path=None):
         for year, infos in year_map.items():
             student_group_data.setdefault(name_lower, []).extend(infos)
 
-    print(f"  Groups extracted: {total_calls} Jev calls "
+    current_metrics = metrics()
+    requests = current_metrics.get("http_requests", 0) - initial_metrics.get("http_requests", 0)
+    hits = current_metrics.get("cache_hits", 0) - initial_metrics.get("cache_hits", 0)
+    print(f"  Groups extracted: {requests} HTTP attempts, {hits} raw-cache hits "
           f"({cached_sheets} sheets from cache)")
 
     return groups_by_subject_year, students_by_year, student_group_data
@@ -406,7 +409,7 @@ def process_file(path, weeks=None, out_dir=None, force=False, student=None):
     return all_events
 
 
-def main():
+def _main():
     ap = argparse.ArgumentParser(description="v2 timetable event pipeline")
     ap.add_argument("files", nargs="*", help="xlsx files (default: all in incoming/)")
     ap.add_argument("--weeks", type=str, default=None,
@@ -439,6 +442,15 @@ def main():
     for path in paths:
         process_file(path, weeks=weeks, out_dir=a.out,
                      force=a.force, student=a.student)
+
+
+def main():
+    reset_metrics()
+    started = time.monotonic()
+    try:
+        _main()
+    finally:
+        report_metrics(time.monotonic() - started)
 
 
 if __name__ == "__main__":

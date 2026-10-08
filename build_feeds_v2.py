@@ -37,6 +37,7 @@ import hashlib
 import json
 import re
 import sys
+import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -49,6 +50,7 @@ from v2.spaces import build_space_events, make_space_uid
 from v2.feed_gen import to_ics, dedup_events, slugify, _subject_key
 from v2.spaces import to_space_ics
 from v2.weeks import weeks_from_filename, is_timetable_name
+from v2.jev_client import reset_metrics, report_metrics
 
 DISPLAY_OVERRIDES = {
     "jj angel": "JJ Angel",
@@ -290,7 +292,7 @@ def dedup_space_events(events):
     return sorted(seen.values(), key=lambda e: e["start"])
 
 
-def main():
+def _main():
     ap = argparse.ArgumentParser(description="Build v2 feeds incrementally")
     ap.add_argument("--incoming", default="incoming")
     ap.add_argument("--out", default="site")
@@ -461,6 +463,15 @@ def main():
     for slug in sorted(event_counts):
         if event_counts[slug] < THIN_THRESHOLD:
             print(f"THIN:{slug}:{event_counts[slug]} events", file=sys.stderr)
+
+
+def main():
+    reset_metrics()
+    started = time.monotonic()
+    try:
+        _main()
+    finally:
+        report_metrics(time.monotonic() - started)
 
 
 if __name__ == "__main__":

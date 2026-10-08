@@ -7,7 +7,7 @@ gets its own compact Jev call — no full-day state needed.
 
 import re
 from . import cache as sheet_cache
-from .jev_client import jev_call
+from .jev_client import jev_call, parallel_map, request_key, record_block_cache_hit
 
 
 def _merge_map(ws):
@@ -295,9 +295,9 @@ CANONICAL_SUBJECT_MAP = {
 }
 
 
-def _classify_block(block, day_name, groups_by_subject_year, target_opts,
-                     weeks_in_file, roster_students=None):
-    """Classify a single block via Jev. Returns {subject, target, weeks, ...}."""
+def _block_request(block, day_name, groups_by_subject_year, target_opts,
+                   weeks_in_file, roster_students=None):
+    """Build the exact model inputs, shared by request and block cache keys."""
     content = "; ".join(TIME_RANGE_RE.sub("", t).strip() or t
                         for t in block["texts"])
 
@@ -408,6 +408,42 @@ def _classify_block(block, day_name, groups_by_subject_year, target_opts,
             },
         }
 
+    return state, questions
+
+
+def _block_cache_key(block, state, questions):
+    # Include deterministic post-processing inputs as well as model inputs.
+    return sheet_cache.fingerprint("day-block-v1", request_key(state, questions), block)
+
+
+def _valid_classification(cls):
+    return isinstance(cls, dict) and {"subject", "target", "weeks"} <= cls.keys()
+
+
+def _legacy_requests_compatible():
+    """Only migrate old sheet caches while their known request template matches.
+
+    The old fingerprint did not include model/prompt inputs. Pin a representative
+    request from that schema so changing those inputs cannot relabel old results
+    as if they came from the new model or prompt.
+    """
+    groups = {"Movement": {1: ["Fri"]}}
+    block = {"texts": ["Dance", "All Yr 1", "Charlie White"],
+             "location": "Studio 1", "time_text": "8.45 - 10.00"}
+    state, questions = _block_request(block, "Friday", groups,
+                                     _build_target_options(groups), [3, 4, 5], ["JJ Angel"])
+    return request_key(state, questions) == "bb60e2937b488b6e25adcfee2264f98dcae6ab3ddd994698f6c1b24cdb29af88"
+
+
+def _classify_block(block, day_name, groups_by_subject_year, target_opts,
+                     weeks_in_file, roster_students=None):
+    state, questions = _block_request(block, day_name, groups_by_subject_year,
+                                     target_opts, weeks_in_file, roster_students)
+    key = _block_cache_key(block, state, questions)
+    cached = sheet_cache.load_artifact("blocks", key)
+    if _valid_classification(cached):
+        record_block_cache_hit()
+        return _fix_classification(block, cached, groups_by_subject_year)
     answers = jev_call(state, questions)
 
     # Collect weeks where Jev said true.
@@ -446,6 +482,7 @@ def _classify_block(block, day_name, groups_by_subject_year, target_opts,
     # Post-process: fix common Jev misclassifications based on text patterns.
     cls = _fix_classification(block, cls, groups_by_subject_year)
 
+    sheet_cache.save_artifact("blocks", key, cls)
     return cls
 
 
@@ -526,11 +563,29 @@ def classify_day_sheet(ws, sheet_name, groups_by_subject_year, weeks_in_file,
     # Per-sheet cache: key = filename + sheet name, fingerprint = what
     # classification depends on (blocks + group options + weeks in file + roster).
     fp_data = (blocks, groups_by_subject_year, weeks_in_file, roster_students)
-    fingerprint = sheet_cache.fingerprint(fp_data)
+    target_opts = _build_target_options(groups_by_subject_year)
+    requests = [_block_request(b, day_name, groups_by_subject_year, target_opts,
+                               weeks_in_file, roster_students) for b in blocks]
+    fingerprint = sheet_cache.fingerprint("day-sheet-v2", fp_data,
+                                          [request_key(*r) for r in requests])
 
     cached = sheet_cache.load(cache_name, sheet_name, fingerprint=fingerprint)
-    if cached is not None and len(cached) == len(blocks):
+    if cached is None and _legacy_requests_compatible():
+        cached = sheet_cache.load(cache_name, sheet_name,
+                                  fingerprint=sheet_cache.fingerprint(fp_data))
+        if (isinstance(cached, list) and len(cached) == len(blocks)
+                and all(_valid_classification(c) for c in cached)):
+            sheet_cache.save(cache_name, sheet_name, cached, fingerprint=fingerprint)
+    if (isinstance(cached, list) and len(cached) == len(blocks)
+            and all(_valid_classification(c) for c in cached)):
         print(f"  Cached '{sheet_name}' ({len(cached)} blocks)")
+        # Migrate existing valid whole-sheet results without paying for fresh
+        # API calls. These are classified artifacts, never invented raw answers.
+        for b, c, (state, questions) in zip(blocks, cached, requests):
+            key = _block_cache_key(b, state, questions)
+            if sheet_cache.load_artifact("blocks", key) is None:
+                sheet_cache.save_artifact("blocks", key, c)
+            record_block_cache_hit()
         results = [
             {"block": b, **c}
             for b, c in zip(blocks, cached)
@@ -543,12 +598,13 @@ def classify_day_sheet(ws, sheet_name, groups_by_subject_year, weeks_in_file,
         return [_fix_classification(b, c, groups_by_subject_year)
                 for b, c in zip(blocks, results)]
 
-    target_opts = _build_target_options(groups_by_subject_year)
+    def classify(b):
+        return _classify_block(b, day_name, groups_by_subject_year, target_opts,
+                               weeks_in_file, roster_students)
 
+    classifications = parallel_map(classify, blocks)
     results = []
-    for i, b in enumerate(blocks):
-        cls = _classify_block(b, day_name, groups_by_subject_year, target_opts,
-                              weeks_in_file, roster_students)
+    for i, (b, cls) in enumerate(zip(blocks, classifications)):
 
         # Post-process: fix common Jev misclassifications based on text patterns.
         cls = _fix_classification(b, cls, groups_by_subject_year)
