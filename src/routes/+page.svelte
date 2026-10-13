@@ -71,7 +71,7 @@
     >
   </nav>
 
-  <section class="flex flex-1 flex-col mt-1">
+  <section class="flex flex-1 flex-col mt-1 pb-8">
     {#if result.status === "empty"}
       <span class="max-w-sm mb-4"
         >Enter your <b>first name</b> or a <b>room</b>.</span
@@ -92,18 +92,8 @@
       <StudentSearch {onresult} initialQuery={restoredQuery} />
     {/if}
 
-    {#if result.status !== "match"}
-      <button
-        type="button"
-        onclick={openFreeRooms}
-        class="mt-8 inline-flex self-center cursor-pointer items-center justify-center gap-2 rounded-2xl border border-line bg-white px-5 py-3 font-medium text-ink-800 shadow-sm transition hover:border-line-dark hover:text-coral-600"
-      >
-        <DoorOpen class="h-5 w-5" />Free Rooms
-      </button>
-    {/if}
-
     {#if result.status !== "empty"}
-      <div aria-live="polite" class="mt-2 pb-8">
+      <div aria-live="polite" class="mt-2">
         {#if result.status === "match"}
           <StudentCard student={result.student} {updated} />
         {:else if result.status === "picker"}
@@ -116,8 +106,7 @@
         {:else if result.status === "too-many"}
           <div class="rounded-2xl border border-line bg-white p-6 text-center">
             <p class="text-ink-500">
-              {result.count} people match “{result.query}” — type a bit more of
-              the name.
+              {result.count} people match "{result.query}" - type a bit more
             </p>
           </div>
         {:else if result.status === "error"}
@@ -128,6 +117,18 @@
           </div>
         {/if}
       </div>
+    {/if}
+
+    {#if result.student?.kind !== "free-rooms"}
+      <button
+        type="button"
+        onclick={openFreeRooms}
+        class="inline-flex self-center cursor-pointer items-center justify-center gap-2 rounded-2xl border border-line bg-white px-5 py-3 font-medium text-ink-800 shadow-sm transition hover:border-line-dark hover:text-coral-600"
+        class:mt-4={result.status === "match"}
+        class:mt-8={result.status !== "match"}
+      >
+        <DoorOpen class="h-5 w-5" />Free Rooms
+      </button>
     {/if}
   </section>
 </main>
