@@ -1,6 +1,11 @@
 {
   "redirects": [
     {
+      "source": "/",
+      "destination": "https://circomedia.yotamfrid.dev/",
+      "permanent": true
+    },
+    {
       "source": "/:path*",
       "destination": "https://circomedia.yotamfrid.dev/:path*",
       "permanent": true
