@@ -7,7 +7,7 @@ from .spaces import to_space_ics
 
 DAY_START = dt.time(8, 45)
 DAY_END = dt.time(18)
-MIN_GAP = dt.timedelta(minutes=20)
+MIN_GAP = dt.timedelta(minutes=30)
 
 
 def build_free_room_events(space_events):
@@ -28,15 +28,15 @@ def build_free_room_events(space_events):
                 end = min(closing, booking["end"])
                 if end <= start:
                     continue
-                if start - cursor >= MIN_GAP:
+                if start - cursor > MIN_GAP:
                     gaps.append((cursor, start))
                 cursor = max(cursor, end)
-            if closing - cursor >= MIN_GAP:
+            if closing - cursor > MIN_GAP:
                 gaps.append((cursor, closing))
             for start, end in gaps:
                 events.append({
                     "date": date, "start": start, "end": end,
-                    "name": f"{room} - Free", "location": room,
+                    "name": f"{room} (free)", "location": room,
                     "subject": "Free Rooms",
                 })
     return sorted(events, key=lambda e: (e["start"], e["location"], e["end"]))

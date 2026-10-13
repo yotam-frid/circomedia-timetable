@@ -1,4 +1,4 @@
-/** Same occupancy complement as v2/free_rooms.py: 08:45–18:00, minimum 20m. */
+/** Same occupancy complement as v2/free_rooms.py: 08:45–18:00, gaps >30m. */
 export function minutesOf(label) {
   const match = /^(\d+):(\d+)$/.exec(label ?? '');
   return match ? +match[1] * 60 + +match[2] : null;
@@ -13,7 +13,7 @@ export function roomGaps(events) {
   let cursor = opening;
   const gaps = [];
   const addGap = (start, end) => {
-    if (end - start >= 20) gaps.push({
+    if (end - start > 30) gaps.push({
       start: timeLabel(start), end: timeLabel(end),
       title: 'Free time', location: '', free: true
     });
