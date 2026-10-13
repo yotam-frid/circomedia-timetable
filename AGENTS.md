@@ -19,9 +19,9 @@ Hetzner box (nginx + adapter-node)
   /srv/timetable-app   UI + /api/*, reads LOCAL_SITE_DIR=/srv/timetable
   https://circomedia.yotamfrid.dev
 
-Vercel (SvelteKit + adapter-vercel)
+Vercel (permanent redirect, configured in vercel.json)
   https://circomedia-timetable.vercel.app
-  /feeds/* and /feeds/spaces/* proxy BLOB_BASE_URL to the box
+  all paths redirect to https://circomedia.yotamfrid.dev, preserving paths and queries
 ```
 
 The launchd plist, nginx/systemd units, TLS, Vercel environment, and other host configuration live outside this repository. Verify them on the host/dashboard. The API returns JSON on success; `/api/meta` has a plain-text 503 fallback, and feed routes return ICS. `BLOB_BASE_URL` defaults to the box.
@@ -33,7 +33,7 @@ Feed paths are a manual compatibility invariant: never rename a known path or sl
 - `build_feeds_v2.py`: production incremental builder; `publish.py`: rsync publisher; `sync.py`: fetch → build → optional publish.
 - `v2/`: Jev classifier, deterministic roster parser, event allocator, feed writers, and caches.
 - `src/routes/api/student/+server.js`, `src/routes/feeds/*`, and `src/lib/server/blob.js`: search, feed proxying, and box/local-data access.
-- `deploy.sh`: builds adapter-node for the box and adapter-vercel for Vercel, then deploys both.
+- `deploy.sh`: builds adapter-node and deploys the UI to the box. `--with-vercel` also deploys the Vercel redirect configuration.
 - Development reads generated `site/` data by default. Set `LOCAL_SITE_DIR` to override the directory, or `BLOB_BASE_URL` to explicitly use remote data. Production defaults to the box.
 
 ```sh
@@ -117,7 +117,7 @@ Run the builder twice and compare normalized feed, roster, space, and manifest o
 
 - Vercel project: `circomedia-timetable`; `BLOB_BASE_URL` must point to the real box origin and is set for production and preview.
 - The box serves data statically and runs `timetable.service` from `/srv/timetable-app`; the service uses `LOCAL_SITE_DIR=/srv/timetable` and `ORIGIN=https://circomedia.yotamfrid.dev`.
-- UI deploys use `./deploy.sh`, not a data publish. Feed responses use 300-second cache headers; generated feeds advertise 30-minute refresh/TTL, but client polling is client-dependent.
+- UI deploys use `./deploy.sh`, not a data publish. **There is no need to update Vercel for UI changes:** it permanently redirects all paths to `circomedia.yotamfrid.dev`. Only use `./deploy.sh --with-vercel` when changing the redirect configuration. Feed responses use 300-second cache headers; generated feeds advertise 30-minute refresh/TTL, but client polling is client-dependent.
 - The calendar is term-2026-specific: `v2/event_creator.py` hard-codes Week 1 as 2026-09-14.
 - **Week 1 is absent from SharePoint and that is expected — do not "fix" it.** The folder holds only `Term 1a Weeks 2 2026.xlsx` and `Term 1a Weeks 3-5 2026 -.xlsx`, so feeds start 2026-09-21 and week 1 (14–18 Sept) is simply not published. It is not a fetch, grammar or `find_weeks` failure, and week 1 is already taught, so there is nothing to recover. The builder pruning the week-1 event cache and its feeds when the file goes missing is correct behaviour, not data loss. `Term 1a Week 1 2026 Old.xlsx` in the repo root is a pre-edit copy (its Clown note still reads `need Valkyrie, Sophie`); do not drop it into `incoming/` to backfill.
 - The fetcher applies no filename grammar at all — it downloads every `.xlsx` and `v2.weeks.is_timetable_name` is the single gate, which reports a reason for every skip. Range forms such as `Weeks 3-5 2026 -` are handled.
