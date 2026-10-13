@@ -13,7 +13,7 @@ MIN_GAP = dt.timedelta(minutes=30)
 def build_free_room_events(space_events):
     events = []
     for room, bookings in sorted(space_events.items()):
-        if room.casefold() in {"meeting room", "classroom"}:
+        if room.casefold() in {"meeting room", "classroom", "studio 1"}:
             continue
         by_day = defaultdict(list)
         for booking in bookings:

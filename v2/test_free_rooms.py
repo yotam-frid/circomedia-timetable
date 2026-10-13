@@ -59,12 +59,13 @@ class FreeRoomsTests(unittest.TestCase):
         bookings = self.bookings([("10:00", "16:00")])
         events = build_free_room_events({
             "South Wing": bookings, "Batcave": bookings,
-            "Meeting Room": bookings, "Classroom": bookings,
+            "Meeting Room": bookings, "Classroom": bookings, "Studio 1": bookings,
         })
         self.assertEqual([e["location"] for e in events], ["Batcave", "South Wing", "Batcave", "South Wing"])
         ics = to_free_rooms_ics(events)
         self.assertIn("X-WR-CALNAME:Circomedia - Free Rooms\r\n", ics)
         self.assertIn("SUMMARY:South Wing (free)\r\n", ics)
+        self.assertNotIn("Studio 1", ics)
         self.assertEqual(ics.count("TRANSP:TRANSPARENT"), 4)
         uids = [line for line in ics.splitlines() if line.startswith("UID:")]
         self.assertEqual(len(set(uids)), 4)
