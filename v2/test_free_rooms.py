@@ -55,7 +55,7 @@ class FreeRoomsTests(unittest.TestCase):
         })
         self.assertEqual([e["location"] for e in events], ["Batcave", "South Wing", "Batcave", "South Wing"])
         ics = to_free_rooms_ics(events)
-        self.assertIn("X-WR-CALNAME:Free Rooms\r\n", ics)
+        self.assertIn("X-WR-CALNAME:Circomedia - Free Rooms\r\n", ics)
         self.assertIn("SUMMARY:South Wing - Free\r\n", ics)
         self.assertEqual(ics.count("TRANSP:TRANSPARENT"), 4)
         uids = [line for line in ics.splitlines() if line.startswith("UID:")]

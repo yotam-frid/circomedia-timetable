@@ -181,7 +181,7 @@ def to_space_ics(events, space_name, *, availability=False):
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
         "PRODID:-//circomedia-timetable//EN",
-        f"X-WR-CALNAME:{'Free Rooms' if availability else 'Circomedia - ' + space_name}",
+        f"X-WR-CALNAME:Circomedia - {space_name}",
         "REFRESH-INTERVAL:PT30M",
         "X-PUBLISHED-TTL:PT30M",
         "BEGIN:VTIMEZONE",
