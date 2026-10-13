@@ -1,6 +1,8 @@
 <script>
   import { ArrowLeft, ArrowRight, ExternalLink } from "@lucide/svelte";
   import { tick } from "svelte";
+  import { dev } from "$app/environment";
+  import { minutesOf, roomGaps } from "$lib/availability.js";
   import {
     prettySubject,
     parseICS,
@@ -13,12 +15,14 @@
   let { student, updated } = $props();
 
   const isSpace = $derived(student.kind === "space");
+  const isFreeRooms = $derived(student.kind === "free-rooms");
+  const isRoomView = $derived(isSpace || isFreeRooms);
 
   let now = $state(new Date());
   let nowKey = $derived(
-    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`,
+    new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).format(now),
   );
-  let nowMinutes = $derived(now.getHours() * 60 + now.getMinutes());
+  let nowMinutes = $derived(minutesOf(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(now)));
 
   $effect(() => {
     let timeout;
@@ -36,11 +40,14 @@
   let days = $state([]);
   let dayIndex = $state(0);
   let current = $derived(days[dayIndex]);
-  let visibleEvents = $derived(current ? withGaps(current.events) : []);
+  let visibleEvents = $derived(current ? (
+    isFreeRooms ? current.events : isSpace
+      ? [...current.events, ...roomGaps(current.events)].sort((a, b) => minutesOf(a.start) - minutesOf(b.start))
+      : withGaps(current.events)
+  ) : []);
   let isToday = $derived(current?.key === nowKey);
-  // Index of the next class (the single NEXT entry): first non-break
-  // event starting after now. Skips free-time gaps so the label always
-  // lands on the upcoming class, including the first entry of the day.
+  // Only the first upcoming entry gets a countdown. In booking calendars,
+  // skip synthesized gaps; in Free Rooms, entries are availability intervals.
   let nextIdx = $derived(
     isToday
       ? visibleEvents.findIndex((ev) => {
@@ -75,7 +82,7 @@
     // effect only re-runs when the student changes, not on day toggles).
     tick().then(() => window.scrollTo(0, 0));
     let cancelled = false;
-    fetch(url)
+    fetch(url, { cache: dev ? "no-store" : "default" })
       .then((res) => {
         if (!res.ok) throw new Error("feed fetch failed");
         return res.text();
@@ -86,7 +93,7 @@
         days = parsed;
         // Feed fetched OK — remember this student for the next visit.
         // (Empty counts too: the feed exists, there are just no classes.)
-        saveLastStudent(student.name);
+        if (!isFreeRooms) saveLastStudent(student.name);
         if (!parsed.length) {
           calState = "empty";
         } else {
@@ -101,11 +108,6 @@
       cancelled = true;
     };
   });
-
-  function minutesOf(label) {
-    const m = /^(\d+):(\d+)$/.exec(label ?? "");
-    return m ? +m[1] * 60 + +m[2] : null;
-  }
 
   function withGaps(events) {
     const out = [];
@@ -140,10 +142,11 @@
   function durationLabel(start, end) {
     const s = minutesOf(start);
     const e = minutesOf(end);
-    if (s == null || e == null || e <= s) return isSpace ? "free" : "break";
+    if (s == null || e == null || e <= s) return isRoomView ? "Free" : "break";
     // Gaps between classes are breaks on a student card but free time on a
     // space card ("free for 1hr 5min" answers "when is the room free?").
-    return isSpace ? `free for ${spanLabel(e - s)}` : `${spanLabel(e - s)} break`;
+    if (isFreeRooms) return spanLabel(e - s);
+    return isRoomView ? `Free for ${spanLabel(e - s)}` : `${spanLabel(e - s)} break`;
   }
 
   function prevDay() {
@@ -158,8 +161,8 @@
 <article
   class="overflow-hidden rounded-2xl border border-line bg-white shadow-sm"
 >
-  {#if isSpace}
-    <!-- Spaces have no groups: static header, "Space" chip, not expandable. -->
+  {#if isRoomView}
+    <!-- Room views have a static header and no student groups. -->
     <div
       class="flex w-full items-center justify-between gap-3 border-b border-line px-6 py-4"
     >
@@ -168,7 +171,7 @@
         <span
           class="rounded-full border border-line bg-cream-100 px-3 py-1 text-sm font-medium text-ink-500"
         >
-          Room
+          {isFreeRooms ? "Availability" : "Room"}
         </span>
       </span>
     </div>
@@ -204,7 +207,7 @@
     </button>
   {/if}
 
-  {#if !isSpace}
+  {#if !isRoomView}
   <div
     id="groups-section"
     class="grid transition-[grid-template-rows] duration-300 ease-in-out"
@@ -236,7 +239,7 @@
   </div>
   {/if}
 
-  <section aria-label="Class schedule">
+  <section aria-label={isFreeRooms ? "Room availability" : "Class schedule"}>
     <div class="flex items-center justify-center py-2">
       <div class="flex items-center gap-1">
         <button
@@ -274,10 +277,10 @@
         <p class="py-1.5 text-ink-500">Loading schedule…</p>
       {:else if calState === "error"}
         <p class="py-1.5 text-ink-500">
-          Couldn't load the schedule — try again in a minute.
+          Can't load this schedule :(
         </p>
       {:else if calState === "empty"}
-        <p class="py-1.5 text-ink-500">No scheduled classes</p>
+        <p class="py-1.5 text-ink-500">{isFreeRooms ? "No free rooms" : "No scheduled classes"}</p>
       {:else if current}
         <ul class="divide-y divide-cream-100">
           {#each visibleEvents as ev, idx (`${ev.start}-${ev.end}-${ev.title}-${ev.location}-${ev.free}`)}
@@ -303,19 +306,21 @@
                   {ev.start}-{ev.end}
                   {#if live}
                     <span class="font-semibold text-coral-600">now</span>
-                  {:else if mins != null && mins < 240}
+                  {:else if mins != null && mins > 0 && mins < 240}
                     <span class="font-semibold text-coral-600"
                       >in {spanLabel(mins)}</span
                     >
                   {/if}
                 </div>
                 <div class="font-bold text-ink-900">
-                  {ev.title}{#if ev.group}{" "}<span
+                  {isFreeRooms ? ev.location : ev.title}{#if !isFreeRooms && ev.group}{" "}<span
                     class="font-normal text-ink-500">({ev.group})</span
                     >
                   {/if}
                 </div>
-                {#if ev.location}
+                {#if isFreeRooms}
+                  <div class="text-ink-500">{durationLabel(ev.start, ev.end)}</div>
+                {:else if ev.location}
                   <div class="text-ink-500">{ev.location}</div>
                 {/if}
               {/if}

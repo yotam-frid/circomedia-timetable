@@ -18,7 +18,8 @@ Incremental model:
 
 Writes (same layout the app + publish.py already expect):
   site/feeds/<slug>.ics          per-student feed
-  site/feeds/spaces/<slug>.ics   per-space feed
+   site/feeds/spaces/<slug>.ics   per-space feed
+   site/feeds/free-rooms.ics     aggregate room availability
   site/roster.json
   site/spaces.json
   site/manifest.json
@@ -49,6 +50,7 @@ from v2.group_parse import drop_junk
 from v2.spaces import build_space_events, make_space_uid
 from v2.feed_gen import to_ics, dedup_events, slugify, _subject_key
 from v2.spaces import to_space_ics
+from v2.free_rooms import build_free_room_events, to_free_rooms_ics
 from v2.weeks import weeks_from_filename, is_timetable_name
 from v2.jev_client import reset_metrics, report_metrics
 
@@ -71,7 +73,8 @@ THIN_THRESHOLD = 8
 # 7: weekday-scoped group membership and slash-separated day blocks.
 # 8: scope weekdays only when disambiguating multiple groups; preserve
 # explicit single-group theory sessions omitted from roster day headings.
-EVENTS_VERSION = 8
+# 9: infer weeks from the Week/Weeks marker, not leading dates/term numbers.
+EVENTS_VERSION = 9
 
 # Subjects hidden from card groups (whole-cohort single-group subjects)
 HIDE_SUBJECTS = {
@@ -235,7 +238,7 @@ def process_one_file(path):
     if weeks is None:
         wb.close()
         raise SystemExit(
-            f"{path.name}: no standalone week number in the filename, so the "
+            f"{path.name}: no valid number after Week/Weeks in the filename, so the "
             f"weeks it covers cannot be determined. Rename it (e.g. "
             f"'Term 1a Weeks 3-5 2026.xlsx') rather than guessing a range."
         )
@@ -304,7 +307,7 @@ def _main():
     out = Path(a.out)
     files = find_weeks(incoming)
     if not files:
-        sys.exit("No Term* week xlsx found")
+        sys.exit("No timetable xlsx with term/week markers found")
 
     events_dir = out / ".events"
     events_dir.mkdir(parents=True, exist_ok=True)
@@ -420,6 +423,15 @@ def _main():
         dest.write_text(ics)
         built += 1
         space_counts[slug] = len(events)
+
+    # Availability is derived after all workbook occupancy has been merged.
+    free_events = build_free_room_events(merged["space_events"])
+    ics = to_free_rooms_ics(free_events)
+    manifest_feeds["free-rooms"] = sha256_text(normalize_ics(ics))
+    dest = feeds_dir / "free-rooms.ics"
+    if not dest.exists() or sha256_text(normalize_ics(dest.read_text())) != manifest_feeds["free-rooms"]:
+        dest.write_text(ics)
+        built += 1
 
     now = dt.datetime.now(LONDON)
     write_json_if_changed(out / "roster.json", {

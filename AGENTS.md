@@ -34,6 +34,7 @@ Feed paths are a manual compatibility invariant: never rename a known path or sl
 - `v2/`: Jev classifier, deterministic roster parser, event allocator, feed writers, and caches.
 - `src/routes/api/student/+server.js`, `src/routes/feeds/*`, and `src/lib/server/blob.js`: search, feed proxying, and box/local-data access.
 - `deploy.sh`: builds adapter-node for the box and adapter-vercel for Vercel, then deploys both.
+- Development reads generated `site/` data by default. Set `LOCAL_SITE_DIR` to override the directory, or `BLOB_BASE_URL` to explicitly use remote data. Production defaults to the box.
 
 ```sh
 corepack enable
@@ -83,7 +84,7 @@ There are also content-addressed caches: `v2/.cache/requests/` stores complete r
 
 Independent group-classification and name-resolution batches, and independent day blocks, use one shared thread pool (`JEV_CONCURRENCY=4` by default). Pass 2 waits for all pass-1 candidates; allocation stays deterministic and consumes results in worksheet order. Concurrent identical payloads share a request. Build/CLI summaries report actual HTTP attempts, successful requests, cache hits, retries, failures, successful-attempt mean latency, and API/queue/backoff seconds summed across workers, separately from build wall time. `JEV_TRACE=1` prints each successful request's elapsed time and question count. A forced event rebuild can reuse classifications; a fully unchanged build makes no Jev requests.
 
-Production considers only `incoming/*.xlsx` names beginning with `term` and containing `week`. It reprocesses a workbook when its SHA-256 changes, its final event cache is missing/stale, or `EVENTS_VERSION` differs. `EVENTS_VERSION` is `8`; that cache stores final allocated events, so bump it for any change that should alter extracted data, classification, allocation, dates, or event payloads. Feeds combine all week files, deduplicate by deterministic UIDs, and rewrite only when normalized content changes. `DTSTAMP`, `LAST-MODIFIED`, and `updated_at` are excluded from change detection; local/remote stale feeds are pruned by the builder/rsync `--delete`.
+Production considers only `incoming/*.xlsx` names containing both `term` and `week`/`weeks` tokens, in any order. Week numbers are read immediately after the `Week`/`Weeks` marker, never from a leading date or term number (e.g. `19.10.26 Week 6, Term 1 - Assesment week.xlsx` covers week 6). It reprocesses a workbook when its SHA-256 changes, its final event cache is missing/stale, or `EVENTS_VERSION` differs. `EVENTS_VERSION` is `9`; that cache stores final allocated events, so bump it for any change that should alter extracted data, classification, allocation, dates, or event payloads. Feeds combine all week files, deduplicate by deterministic UIDs, and rewrite only when normalized content changes. `DTSTAMP`, `LAST-MODIFIED`, and `updated_at` are excluded from change detection; local/remote stale feeds are pruned by the builder/rsync `--delete`.
 
 ## Allocation and parser gotchas
 
@@ -96,15 +97,18 @@ Production considers only `incoming/*.xlsx` names beginning with `term` and cont
 - **Roster membership comes from the Core Skills Groups sheet, not the staff-name list.** The group sheets contain both students and staff, and a student can share a name with a mentor (Lisa is a Year 2 student *and* a Core Skills tutor), so `group_parse.drop_junk` takes the school's own cross-year enrolment list (`enrolled_students`) as the authority: on the list means student regardless of `TEACHERS`, off the list plus a staff name means mentor. Junk strings are still dropped unconditionally. Without the list the staff list is the only signal, which is what silently deleted Lisa and her Stand Up. `v2/test_roster.py` covers this.
 - **A group may be named after the day it meets.** Year 2 `Clown` and `Stand up` are the clearest cases: the class has no group structure, so the group sheet labels those columns with the day (`Monday`, `Friday`) and the classifier returns a weekday target (`Mon (Clown, 2)`). A weekday label says *when*, not *which group*, so it can never be corroborated by a day-sheet block; `_target_matches_student` therefore exempts weekday labels from the `group_allowed` block-text gate, leaving the day-session rule as a fallback rather than the sole path. The day cell is not load-bearing either: `_extract_days` accepts every spelling the school uses (`Monday`, `Mon`, `Fridays`), an unreadable day leaves an empty membership that still registers the subject in `groups_by_subject_year`, and the day-session rule reads "enrolled, no day recorded" as "meets whenever timetabled" — the same convention as a block with no week marker. "Not enrolled" (no entry for the subject) is the only case that never matches. `v2/test_allocation.py` covers all of this.
 - Space feeds are occupancy feeds, not Jev-classified student feeds: `v2/spaces.py` emits extracted non-closed blocks for every week covered by the workbook and ignores `(wkN)` markers.
+- `v2/free_rooms.py` derives `/feeds/free-rooms.ics` from merged room occupancy: 08:45–18:00, gaps of at least 20 minutes, overlapping/touching bookings unioned, no events for room-days without bookings. Availability events are transparent and titled `<Room> - Free`. Individual room views use matching rules in `src/lib/availability.js`; `v2.test_free_rooms` checks Python/JS parity. The home-only Free Rooms button opens the aggregate view without replacing the remembered student.
+- Free Rooms excludes Meeting Room and Classroom. Its UI highlights all currently free intervals but shows an `in …` countdown only on the first upcoming interval (within four hours, on today's view). Feed requests bypass browser caching in development; the Free Rooms route also returns `no-store` during development.
 - `v2/day_classify.py` defines `_fix_classification` twice; the later definition shadows the earlier one. `CANONICAL_SUBJECT_MAP` is currently unused; returned choice keys are consumed directly.
 
 ## Validation
+
+Do not run `pnpm build` after every change. For routine UI, styling, or copy edits, use the running dev server and targeted browser checks; run relevant tests for logic changes. Run a production build only when explicitly requested, required for deployment, or needed to verify a build-specific change.
 
 ```sh
 python3 -m unittest v2.test_roster v2.test_allocation v2.test_weeks v2.test_jev
 python3 build_feeds_v2.py
 python3 build_feeds_v2.py
-pnpm build
 ```
 
 Run the builder twice and compare normalized feed, roster, space, and manifest output to confirm the incremental cache is stable. For a fresh classification pass, use `python3 -m v2.v2_cli --nocache`; for matcher changes, manually diff Yotam’s DTSTART/SUMMARY/LOCATION tuples and inspect advisory `THIN:` output. `THIN` only covers student feeds rewritten in that run.

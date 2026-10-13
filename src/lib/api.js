@@ -246,7 +246,7 @@ export function parseICS(text) {
     .sort(([a], [b]) => (a < b ? -1 : 1))
     .map(([key, events]) => ({
       key,
-      events: events.sort((a, b) => a.sort - b.sort)
+      events: events.sort((a, b) => a.sort - b.sort || a.location.localeCompare(b.location) || a.end.localeCompare(b.end))
     }));
 }
 
@@ -260,11 +260,11 @@ export function formatDayLabel(dateKey) {
   return `${days[d.getDay()]}, ${d.getDate()} ${months[d.getMonth()]}`;
 }
 
-/** Local today as "YYYY-MM-DD" for picking the initial calendar day. */
+/** London today as "YYYY-MM-DD", matching timetable wall-clock times. */
 export function todayKey() {
-  const d = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(new Date());
 }
 
 /** Index of the day to show first: today when present, else the next

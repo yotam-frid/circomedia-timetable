@@ -8,9 +8,8 @@ build_feeds_v2.find_weeks is the only gate and it calls is_timetable_name here.
 import re
 from pathlib import Path
 
-# A standalone number: non-alphanumeric on both sides, so "1a"/"2b" (term
-# markers) and "2026" adjacent to letters never match.
-NUM_RE = re.compile(r"(?<![A-Za-z0-9])(\d+)(?![A-Za-z0-9])")
+# Read the number attached to the week marker, never a leading date or term.
+WEEK_NUMBER_RE = re.compile(r"\bweeks?\s+(\d+)(?![A-Za-z0-9])", re.I)
 # Dash chain continuation, tolerant of en/em dashes and surrounding spaces.
 DASH_RE = re.compile(r"\s*[-‐-―]\s*(\d+)\b")
 TERM_RE = re.compile(r"\bterm\b", re.I)
@@ -32,16 +31,18 @@ def is_timetable_name(name):
 def weeks_from_filename(path):
     """'Term 1a Weeks 3-5 2026 -.xlsx' -> [3,4,5]; 'Week 1' -> [1].
 
-    Takes the first standalone number, then extends along a dash chain
+    Takes the number immediately after 'Week'/'Weeks', then extends along a dash chain
     ('3-5', '12 – 14'). The chain stops on a non-increasing or out-of-range
     value, so a trailing ' -' and 'Week 1 - 2026' stay inert. Returns None
-    when no standalone number is present; the caller decides what that means.
+    when no valid week number is present; the caller decides what that means.
     """
     stem = Path(path).stem
-    m = NUM_RE.search(stem)
+    m = WEEK_NUMBER_RE.search(stem)
     if not m:
         return None
     lo = int(m.group(1))
+    if not 1 <= lo <= MAX_WEEK:
+        return None
     weeks = [lo]
     pos = m.end()
     while True:

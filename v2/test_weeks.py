@@ -9,6 +9,22 @@ class TestWeeksFromFilename(unittest.TestCase):
     def test_single_week_singular(self):
         self.assertEqual(weeks_from_filename("Term 1a Week 1 2026.xlsx"), [1])
 
+    def test_date_prefixed_assessment_week(self):
+        self.assertEqual(weeks_from_filename(
+            "19.10.26 Week 6, Term 1 - Assesment week.xlsx"), [6])
+
+    def test_date_prefixed_range(self):
+        self.assertEqual(weeks_from_filename(
+            "19.10.26 Weeks 6-8, Term 1.xlsx"), [6, 7, 8])
+
+    def test_numeric_term_is_not_a_week(self):
+        self.assertEqual(weeks_from_filename("Term 1 Week 6 2026.xlsx"), [6])
+
+    def test_missing_or_invalid_week_does_not_use_other_numbers(self):
+        for name in ("19.10.26 Term 1 assessment week.xlsx",
+                     "Term 1 Week 2026.xlsx", "Term 1 Week 0.xlsx"):
+            self.assertIsNone(weeks_from_filename(name), name)
+
     def test_plural_word_single_number(self):
         # Publishers write "Weeks 2" for a single week.
         self.assertEqual(weeks_from_filename("Term 1a Weeks 2 2026.xlsx"), [2])
@@ -64,7 +80,8 @@ class TestIsTimetableName(unittest.TestCase):
     def test_accepts_known_shapes(self):
         for name in ("Term 1a Week 1 2026.xlsx",
                      "Term 1a Weeks 3-5 2026 -.xlsx",
-                     "Term 1a Weeks 1-3 2026.xlsx",
+                      "Term 1a Weeks 1-3 2026.xlsx",
+                      "19.10.26 Week 6, Term 1 - Assesment week.xlsx",
                      "term 2b weeks 8-10 2027.XLSX"):
             self.assertTrue(is_timetable_name(name), name)
 

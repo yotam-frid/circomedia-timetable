@@ -169,16 +169,19 @@ def make_space_uid(date, start, end, subject_key, name):
     return f"{hashlib.sha1(raw.encode()).hexdigest()[:16]}@circomedia"
 
 
-def to_space_ics(events, space_name):
+def to_space_ics(events, space_name, *, availability=False):
     """Generate RFC 5545 .ics content for a space schedule."""
     from .feed_gen import fold_ics_line, _subject_key
+
+    def escape(value):
+        return value.replace("\\", "\\\\").replace("\n", "\\n").replace(";", "\\;").replace(",", "\\,")
 
     now = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
         "PRODID:-//circomedia-timetable//EN",
-        f"X-WR-CALNAME:Circomedia - {space_name}",
+        f"X-WR-CALNAME:{'Free Rooms' if availability else 'Circomedia - ' + space_name}",
         "REFRESH-INTERVAL:PT30M",
         "X-PUBLISHED-TTL:PT30M",
         "BEGIN:VTIMEZONE",
@@ -209,6 +212,8 @@ def to_space_ics(events, space_name):
         loc = e["location"]
         if loc == "Gym Bay 1 + Gym Bay 2":
             loc = "Gym"
+        if availability:
+            desc = "Room availability"
         lines += [
             "BEGIN:VEVENT",
             f"UID:{uid}",
@@ -217,9 +222,10 @@ def to_space_ics(events, space_name):
             f"SEQUENCE:0",
             f"DTSTART;TZID=Europe/London:{e['start'].strftime('%Y%m%dT%H%M%S')}",
             f"DTEND;TZID=Europe/London:{e['end'].strftime('%Y%m%dT%H%M%S')}",
-            f"SUMMARY:{e['name']}",
-            f"LOCATION:{loc}",
+            f"SUMMARY:{escape(e['name']) if availability else e['name']}",
+            f"LOCATION:{escape(loc) if availability else loc}",
             f"DESCRIPTION:{desc}",
+            *(["TRANSP:TRANSPARENT"] if availability else []),
             "END:VEVENT",
         ]
     lines.append("END:VCALENDAR")

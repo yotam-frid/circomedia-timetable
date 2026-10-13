@@ -1,20 +1,21 @@
 import { env } from '$env/dynamic/private';
+import { dev } from '$app/environment';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 // Public origin — the base URL is not secret (objects are world-readable).
-// Env wins when set (Vercel production/preview → the Hetzner box); fallback
-// keeps `npm run dev` working with zero setup against the box too.
+// Env wins when set (Vercel production/preview → the Hetzner box).
 export const BLOB_BASE =
   env.BLOB_BASE_URL?.replace(/\/$/, '') ||
   'https://circomedia.yotamfrid.dev';
 
-// Local-dev escape hatch: point at a build_feeds_v2.py output dir and the server
-// reads roster/manifest/feeds from disk instead of the published box, with the
-// caches below disabled. Production is untouched (env unset there).
+// Development defaults to generated local data. LOCAL_SITE_DIR overrides the
+// directory; an explicit BLOB_BASE_URL selects remote data instead. Production
+// uses the box unless LOCAL_SITE_DIR is set (as on the box itself).
 //   python3 build_feeds_v2.py               # refresh site/ from incoming/
 //   LOCAL_SITE_DIR=$PWD/site pnpm dev
-const SITE_DIR = env.LOCAL_SITE_DIR?.replace(/\/$/, '') || null;
+const SITE_DIR = env.LOCAL_SITE_DIR?.replace(/\/$/, '') ||
+  (dev && !env.BLOB_BASE_URL ? join(process.cwd(), 'site') : null);
 
 export const ROSTER_TTL = SITE_DIR ? 0 : 300; // seconds; roster changes rarely
 

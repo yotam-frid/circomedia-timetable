@@ -2,6 +2,7 @@
   import StudentSearch from "$lib/StudentSearch.svelte";
   import StudentCard from "$lib/StudentCard.svelte";
   import StudentPicker from "$lib/StudentPicker.svelte";
+  import { ArrowLeft, DoorOpen } from "@lucide/svelte";
   import {
     fetchMeta,
     formatUpdated,
@@ -9,12 +10,24 @@
     searchStudent,
     loadLastStudent,
     clearLastStudent,
+    feedUrls,
   } from "$lib/api.js";
   import { onMount } from "svelte";
 
   let result = $state({ status: "empty" });
   let updated = $state("…");
   let restoredQuery = $state("");
+
+  function openFreeRooms() {
+    result = {
+      status: "match",
+      student: {
+        kind: "free-rooms",
+        name: "Free Rooms",
+        feed: feedUrls("free-rooms"),
+      },
+    };
+  }
 
   function onresult(r) {
     // Clearing the box forgets the remembered student; anything else
@@ -60,12 +73,37 @@
 
   <section class="flex flex-1 flex-col mt-1">
     {#if result.status === "empty"}
-      <span class="max-w-sm mb-4">Enter your <b>first name</b> or a <b>room</b>.</span>
+      <span class="max-w-sm mb-4"
+        >Enter your <b>first name</b> or a <b>room</b>.</span
+      >
     {/if}
-    <StudentSearch {onresult} initialQuery={restoredQuery} />
+    {#if result.student?.kind === "free-rooms"}
+      <button
+        type="button"
+        onclick={() => {
+          result = { status: "empty" };
+          restoredQuery = "";
+        }}
+        class="mb-2 inline-flex cursor-pointer items-center gap-2 self-start rounded-lg py-2 text-sm text-ink-500 transition hover:text-coral-600"
+      >
+        <ArrowLeft class="h-4 w-4" />Back
+      </button>
+    {:else}
+      <StudentSearch {onresult} initialQuery={restoredQuery} />
+    {/if}
+
+    {#if result.status !== "match"}
+      <button
+        type="button"
+        onclick={openFreeRooms}
+        class="mt-8 inline-flex self-center cursor-pointer items-center justify-center gap-2 rounded-2xl border border-line bg-white px-5 py-3 font-medium text-ink-800 shadow-sm transition hover:border-line-dark hover:text-coral-600"
+      >
+        <DoorOpen class="h-5 w-5" />Free Rooms
+      </button>
+    {/if}
 
     {#if result.status !== "empty"}
-      <div aria-live="polite" class="mt-2">
+      <div aria-live="polite" class="mt-2 pb-8">
         {#if result.status === "match"}
           <StudentCard student={result.student} {updated} />
         {:else if result.status === "picker"}
