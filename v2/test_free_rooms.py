@@ -4,7 +4,11 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill
+
 from .free_rooms import build_free_room_events, to_free_rooms_ics
+from .spaces import build_space_events, extract_closures, to_space_ics
 
 
 class FreeRoomsTests(unittest.TestCase):
@@ -72,6 +76,56 @@ class FreeRoomsTests(unittest.TestCase):
         self.assertEqual(uids, [line for line in to_free_rooms_ics(events).splitlines() if line.startswith("UID:")])
         escaped = to_free_rooms_ics(build_free_room_events({"Room, A;B": bookings}))
         self.assertIn("SUMMARY:Room\\, A\\;B (free)", escaped)
+
+    def test_worksheet_restrictions_and_room_feed_ui_parity(self):
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Friday 23rd"
+        for col, name in enumerate(["Gym Bay 1", "Gym Bay 2", "South Wing", "Studio 2", "Batcave"], 2):
+            ws.cell(2, col, name)
+        for row in range(4, 50):
+            minute = 8 * 60 + 45 + (row - 4) * 15
+            ws.cell(row, 1, f"{minute // 60 % 12 or 12}.{minute % 60:02d}{'pm' if minute >= 720 else 'am'}")
+        grey = PatternFill("solid", fgColor="888888")
+        other_grey = PatternFill("solid", fgColor="666666")
+        # A centred label closes its whole shaded band, then the room reopens.
+        for row in range(13, 17):  # 11:00–12:00
+            ws.cell(row, 4).fill = grey
+        ws["D15"] = " Closed to students "
+        # Merged closure covers both gym bays, using a different grey.
+        ws.merge_cells("B21:C24")  # 13:00–14:00
+        ws["B21"] = "Closed"
+        ws["B21"].fill = other_grey
+        ws["D32"] = " Student Training Ends "  # 15:45
+        ws["E37"] = "Student Training Ends"  # 17:00 (room-specific)
+        ws["F44"] = "Student Training Ends"  # 18:45, capped/ignored
+        closures = extract_closures(ws)
+        spans = {(b["location"], b["start_time"], b["end_time"]) for b in closures}
+        self.assertIn(("Gym Bay 1", (13, 0), (14, 0)), spans)
+        self.assertIn(("Gym Bay 2", (13, 0), (14, 0)), spans)
+        self.assertIn(("South Wing", (11, 0), (12, 0)), spans)
+        self.assertIn(("South Wing", (15, 45), (18, 0)), spans)
+        self.assertIn(("Studio 2", (17, 0), (18, 0)), spans)
+        self.assertFalse(any(b["location"] == "Batcave" for b in closures))
+        rooms = build_space_events([(ws.title, ws)], weeks_to_cover=[6])
+        events = build_free_room_events(rooms)
+        self.assertEqual([(e["start"].strftime("%H:%M"), e["end"].strftime("%H:%M"))
+                          for e in events if e["location"] == "South Wing"],
+                         [("08:45", "11:00"), ("12:00", "15:45")])
+        # Exercise the actual ICS payload used by the individual-room UI.
+        ics = to_space_ics(rooms["South Wing"], "South Wing")
+        self.assertIn("SUMMARY:Student Training Ends", ics)
+        self.assertIn("DTSTART;TZID=Europe/London:20261023T154500", ics)
+        script = """
+          import { roomGaps } from './src/lib/availability.js';
+          console.log(JSON.stringify(roomGaps(JSON.parse(process.argv[1])).map(e => [e.start, e.end])));
+        """
+        output = subprocess.check_output(
+            ["node", "--input-type=module", "-e", script,
+             json.dumps([{"start": e["start"].strftime("%H:%M"), "end": e["end"].strftime("%H:%M")}
+                         for e in rooms["South Wing"]])],
+            cwd=Path(__file__).resolve().parents[1], text=True)
+        self.assertEqual(json.loads(output), [["8:45", "11:00"], ["12:00", "15:45"]])
 
 
 if __name__ == "__main__":

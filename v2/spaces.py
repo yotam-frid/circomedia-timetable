@@ -50,6 +50,69 @@ def list_spaces(day_sheets):
     return sorted(spaces)
 
 
+def extract_closures(ws):
+    """Read room restrictions directly from time rows and shaded cell spans.
+
+    Training-end markers close that room through the 18:00 availability cap.
+    Closed labels occupy their entire contiguous fill band (the label may be
+    vertically centred). Resolve merged cells for both labels and fills.
+    """
+    from .day_classify import _locations, _merge_map, _val_cell, fill_key
+
+    mm = _merge_map(ws)
+    times = {}
+    for row in range(3, ws.max_row + 1):
+        value = ws.cell(row, 1).value
+        if isinstance(value, (dt.datetime, dt.time)):
+            times[row] = (value.hour, value.minute)
+            continue
+        match = re.fullmatch(r"\s*(\d{1,2})[.:](\d{2})\.?\s*(am|pm)?\s*",
+                             str(value or ""), re.IGNORECASE)
+        if match:
+            hour, minute = int(match[1]), int(match[2])
+            suffix = (match[3] or "").lower()
+            if suffix:
+                hour = hour % 12 + (12 if suffix == "pm" else 0)
+            elif hour < 8:
+                hour += 12
+            if hour < 24 and minute < 60:
+                times[row] = (hour, minute)
+
+    closures = []
+    for col, location in _locations(ws, mm).items():
+        seen = set()
+        for row in times:
+            cell = _val_cell(ws, row, col, mm)
+            if cell.coordinate in seen:
+                continue
+            seen.add(cell.coordinate)
+            label = " ".join(str(cell.value or "").split()).casefold()
+            if label not in {"student training ends", "closed", "closed to students"}:
+                continue
+            start_row, end_row = row, row + 1
+            if label == "student training ends":
+                end_time = (18, 0)
+            else:
+                colour = fill_key(cell)
+                if colour != ("none",):
+                    while start_row - 1 in times and fill_key(_val_cell(ws, start_row - 1, col, mm)) == colour:
+                        start_row -= 1
+                    while end_row in times and fill_key(_val_cell(ws, end_row, col, mm)) == colour:
+                        end_row += 1
+                end_time = times.get(end_row, (18, 0))
+            start_time = max(times[start_row], (8, 45))
+            end_time = min(end_time, (18, 0))
+            if start_time < end_time:
+                closures.append({
+                    "closure": True,
+                    "location": location, "start_time": start_time,
+                    "end_time": end_time,
+                    "texts": ["Student Training Ends" if label == "student training ends"
+                              else "Closed to students"],
+                })
+    return closures
+
+
 def build_space_events(day_sheets, weeks_to_cover=None):
     """Build per-space event lists from day-sheet blocks.
 
@@ -73,8 +136,9 @@ def build_space_events(day_sheets, weeks_to_cover=None):
             continue
 
         blocks = extract_blocks(ws, wb=ws.parent, legend=legend)
+        closures = extract_closures(ws)
 
-        for b in blocks:
+        for b in blocks + closures:
             cs = canonical_space(b["location"])
             if not cs:
                 continue
@@ -83,14 +147,15 @@ def build_space_events(day_sheets, weeks_to_cover=None):
             if not texts:
                 continue
 
-            # Filter out empty/closed blocks.
+            # Ordinary class extraction may contain closure text; restrictions
+            # are parsed separately from worksheet rows and fills.
             content_lower = " ".join(texts).lower()
-            if "closed" in content_lower or "student training ends" in content_lower:
+            if not b.get("closure") and ("closed" in content_lower or "student training ends" in content_lower):
                 continue
 
             (sh, sm), (eh, em) = b["start_time"], b["end_time"]
             teachers = _teachers(texts)
-            name = _space_event_name(texts)
+            name = texts[0] if b.get("closure") else _space_event_name(texts)
 
             # Determine weeks this block applies to.
             # For spaces, we include all weeks unless we can infer otherwise.

@@ -1,4 +1,5 @@
-/** Same occupancy complement as v2/free_rooms.py: 08:45–18:00, gaps >30m. */
+/** Same complement as v2/free_rooms.py: 08:45–18:00 cap, gaps >30m.
+ * Room feeds include worksheet closures and Student Training Ends intervals. */
 export function minutesOf(label) {
   const match = /^(\d+):(\d+)$/.exec(label ?? '');
   return match ? +match[1] * 60 + +match[2] : null;

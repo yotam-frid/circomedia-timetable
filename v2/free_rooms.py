@@ -1,4 +1,8 @@
-"""Availability derived from room occupancy, never from empty room-days."""
+"""Availability from occupancy including worksheet closures/training ends.
+
+18:00 is the upper bound/fallback; earlier worksheet restrictions are bookings.
+Never infer availability for empty room-days.
+"""
 
 import datetime as dt
 from collections import defaultdict

@@ -74,7 +74,8 @@ THIN_THRESHOLD = 8
 # 8: scope weekdays only when disambiguating multiple groups; preserve
 # explicit single-group theory sessions omitted from roster day headings.
 # 9: infer weeks from the Week/Weeks marker, not leading dates/term numbers.
-EVENTS_VERSION = 9
+# 10: include worksheet training-end markers and shaded room closures.
+EVENTS_VERSION = 10
 
 # Subjects hidden from card groups (whole-cohort single-group subjects)
 HIDE_SUBJECTS = {
